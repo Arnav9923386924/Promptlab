@@ -1,0 +1,15 @@
+# PromptLab Quick Config
+version: 1
+
+models:
+  default: ollama/llama3.1:8b
+  providers:
+    ollama:
+      endpoint: http://localhost:11434
+
+council:
+  enabled: false
+
+testing:
+  parallelism: 4
+  timeout_ms: 30000

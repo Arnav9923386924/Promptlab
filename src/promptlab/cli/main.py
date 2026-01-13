@@ -386,7 +386,178 @@ def benchmark(
     console.print(f"[cyan]Run: promptlab test[/cyan]")
 
 
+# Quick config for API setup
+QUICK_CONFIG_TEMPLATE = """# PromptLab Quick Config
+version: 1
+
+models:
+  default: {provider}/{model}
+  providers:
+    {provider}:
+      {config_key}: {config_value}
+
+council:
+  enabled: false
+
+testing:
+  parallelism: 4
+  timeout_ms: 30000
+"""
+
+
+@app.command("setup")
+def setup(
+    provider: str = typer.Argument(..., help="Provider: ollama, openrouter"),
+    api_key: str = typer.Option(None, "--api-key", "-k", help="API key for openrouter"),
+    endpoint: str = typer.Option("http://localhost:11434", "--endpoint", "-e", help="Endpoint for ollama"),
+    model: str = typer.Option(None, "--model", "-m", help="Model to use"),
+):
+    """Quick setup - configure API keys and model in one command."""
+    cwd = Path.cwd()
+    config_path = cwd / "promptlab.yaml"
+    tests_dir = cwd / "tests"
+    
+    # Determine config based on provider
+    if provider == "openrouter":
+        if not api_key:
+            console.print("[red]✗ OpenRouter requires --api-key[/red]")
+            raise typer.Exit(1)
+        config_key = "api_key"
+        config_value = api_key
+        default_model = model or "google/gemini-2.0-flash-001"
+    elif provider == "ollama":
+        config_key = "endpoint"
+        config_value = endpoint
+        default_model = model or "llama3.1:8b"
+    else:
+        console.print(f"[red]Unknown provider: {provider}[/red]")
+        console.print("Supported: ollama, openrouter")
+        raise typer.Exit(1)
+    
+    # Create config
+    config_content = QUICK_CONFIG_TEMPLATE.format(
+        provider=provider,
+        model=default_model,
+        config_key=config_key,
+        config_value=config_value,
+    )
+    
+    config_path.write_text(config_content)
+    tests_dir.mkdir(exist_ok=True)
+    
+    console.print(Panel(
+        f"[bold]Provider:[/bold] {provider}\n"
+        f"[bold]Model:[/bold] {default_model}\n"
+        f"[bold]Config:[/bold] {config_path}",
+        title="✓ Setup Complete",
+        border_style="green",
+    ))
+    console.print()
+    console.print("[cyan]Next: promptlab run performance[/cyan]")
+    console.print("[cyan]  or: promptlab run roleplay[/cyan]")
+
+
+@app.command("run")
+def run_quick(
+    mode: str = typer.Argument(..., help="Mode: 'roleplay' or 'performance'"),
+    samples: int = typer.Option(10, "--samples", "-n", help="Number of test samples"),
+):
+    """Quick test - run roleplay or performance tests."""
+    import asyncio
+    from promptlab.utils.config import load_config
+    from promptlab.core.runner import TestRunner, print_results
+    
+    cwd = Path.cwd()
+    config_path = cwd / "promptlab.yaml"
+    tests_dir = cwd / "tests"
+    
+    # Check setup
+    if not config_path.exists():
+        console.print("[red]✗ Run 'promptlab setup' first[/red]")
+        raise typer.Exit(1)
+    
+    tests_dir.mkdir(exist_ok=True)
+    
+    if mode == "performance":
+        # Download and run benchmark
+        console.print(Panel(
+            "[bold]Mode:[/bold] Performance Testing\n"
+            "[bold]Dataset:[/bold] GSM8K (Math Reasoning)\n"
+            f"[bold]Samples:[/bold] {samples}",
+            title="🚀 Running Performance Test",
+            border_style="blue",
+        ))
+        
+        from promptlab.utils.datasets import import_gsm8k
+        import_gsm8k(tests_dir, max_samples=samples)
+        
+        # Run tests
+        config = load_config(config_path)
+        runner = TestRunner(config)
+        run_result = asyncio.run(runner.run_all(tests_dir, ["tests/gsm8k.yaml"]))
+        print_results(run_result)
+        
+    elif mode == "roleplay":
+        # Create simple roleplay test
+        console.print(Panel(
+            "[bold]Mode:[/bold] Roleplay Testing\n"
+            "[bold]Tests:[/bold] Sentiment, Support Routing\n"
+            f"[bold]Samples:[/bold] Quick tests",
+            title="🎭 Running Roleplay Test",
+            border_style="blue",
+        ))
+        
+        # Create quick roleplay tests
+        roleplay_tests = {
+            "metadata": {"name": "Quick Roleplay Tests"},
+            "defaults": {"temperature": 0},
+            "cases": [
+                {
+                    "id": "sentiment-positive",
+                    "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: I love this product!",
+                    "assertions": [{"type": "regex", "pattern": "(?i)positive"}]
+                },
+                {
+                    "id": "sentiment-negative",
+                    "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: This is terrible!",
+                    "assertions": [{"type": "regex", "pattern": "(?i)negative"}]
+                },
+                {
+                    "id": "support-billing",
+                    "prompt": "Classify into BILLING, TECHNICAL, or SALES. Reply one word.\nMessage: I need a refund.",
+                    "assertions": [{"type": "regex", "pattern": "(?i)billing"}]
+                },
+                {
+                    "id": "support-tech",
+                    "prompt": "Classify into BILLING, TECHNICAL, or SALES. Reply one word.\nMessage: The app crashes.",
+                    "assertions": [{"type": "regex", "pattern": "(?i)technical"}]
+                },
+                {
+                    "id": "instruction-follow",
+                    "prompt": "Say only the word 'hello'. Nothing else.",
+                    "assertions": [{"type": "regex", "pattern": "(?i)hello"}]
+                },
+            ]
+        }
+        
+        roleplay_path = tests_dir / "quick_roleplay.yaml"
+        with open(roleplay_path, "w", encoding="utf-8") as f:
+            yaml.dump(roleplay_tests, f, default_flow_style=False)
+        
+        # Run tests
+        config = load_config(config_path)
+        runner = TestRunner(config)
+        run_result = asyncio.run(runner.run_all(tests_dir, ["tests/quick_roleplay.yaml"]))
+        print_results(run_result)
+        
+    else:
+        console.print(f"[red]Unknown mode: {mode}[/red]")
+        console.print("Use: performance, roleplay")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
+
 
 
