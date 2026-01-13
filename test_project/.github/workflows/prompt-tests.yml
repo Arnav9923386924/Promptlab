@@ -1,0 +1,32 @@
+# PromptLab CI/CD Workflow
+name: Prompt Tests
+
+on:
+  pull_request:
+    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+  push:
+    branches: [main]
+    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+
+jobs:
+  prompt-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install PromptLab
+        run: pip install promptlab
+      
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull llama3.1:8b
+      
+      - name: Run Tests
+        run: promptlab test --ci

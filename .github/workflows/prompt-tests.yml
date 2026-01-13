@@ -1,0 +1,101 @@
+# PromptLab CI/CD Workflow
+# This workflow runs prompt tests on every PR that modifies prompts or tests
+
+name: Prompt Tests
+
+on:
+  pull_request:
+    paths:
+      - 'prompts/**'
+      - 'tests/**'
+      - 'promptlab.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'prompts/**'
+      - 'tests/**'
+      - 'promptlab.yaml'
+
+jobs:
+  prompt-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install PromptLab
+        run: pip install promptlab
+      
+      # Option 1: Use Ollama (free, local)
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull llama3.1:8b
+      
+      # Option 2: Use OpenRouter (faster, paid)
+      # Uncomment and add OPENROUTER_API_KEY to repository secrets
+      # env:
+      #   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      
+      - name: Run Prompt Tests
+        run: promptlab test --ci
+      
+      # Optional: Compare against baseline
+      # - name: Run with Baseline Check
+      #   run: promptlab test --ci --baseline main
+      
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prompt-test-results
+          path: .promptlab/runs/
+          retention-days: 30
+
+  # Optional: Separate job for baseline creation on main
+  update-baseline:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: prompt-tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install PromptLab
+        run: pip install promptlab
+      
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull llama3.1:8b
+      
+      - name: Create/Update Baseline
+        run: |
+          promptlab test --ci
+          # promptlab baseline create --tag main
+      
+      - name: Commit Baseline
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .promptlab/baselines/
+          git diff --staged --quiet || git commit -m "Update test baseline [skip ci]"
+          git push
