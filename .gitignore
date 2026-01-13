@@ -38,7 +38,8 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Test project config (contains API keys)
+# PromptLab config (may contain API keys)
+promptlab.yaml
 test_project/promptlab.yaml
 
 # Logs
