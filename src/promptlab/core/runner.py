@@ -1,4 +1,4 @@
-"""Test runner - orchestrates test execution."""
+"""Test runner - orchestrates test execution with parallel processing."""
 
 import asyncio
 from datetime import datetime
@@ -7,7 +7,6 @@ from typing import Optional
 import time
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from promptlab.core.models import (
@@ -53,23 +52,27 @@ class TestRunner:
         else:
             self.council = None
     
-    async def run_test_file(self, path: Path) -> list[TestResult]:
+    async def run_test_file(self, path: Path, semaphore: asyncio.Semaphore = None) -> list[TestResult]:
         """Run all tests in a file.
         
         Args:
             path: Path to test file
+            semaphore: Optional semaphore for concurrency control
             
         Returns:
             List of test results
         """
         suite = parse_test_file(path)
-        results = []
         
-        for case in suite.cases:
-            result = await self.run_test_case(case, suite)
-            results.append(result)
+        # Run all cases in parallel with semaphore
+        async def run_with_semaphore(case):
+            if semaphore:
+                async with semaphore:
+                    return await self.run_test_case(case, suite)
+            return await self.run_test_case(case, suite)
         
-        return results
+        results = await asyncio.gather(*[run_with_semaphore(case) for case in suite.cases])
+        return list(results)
     
     async def run_test_case(self, case: TestCase, suite: TestSuite) -> TestResult:
         """Run a single test case.
@@ -183,18 +186,22 @@ class TestRunner:
                     filtered.append(f)
             test_files = filtered
         
+        # Create semaphore for controlled parallelism
+        parallelism = self.config.testing.parallelism if hasattr(self.config, 'testing') and self.config.testing else 4
+        semaphore = asyncio.Semaphore(parallelism)
+        
         all_results = []
         
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            for test_file in test_files:
-                task = progress.add_task(f"Running {test_file.name}...", total=None)
-                results = await self.run_test_file(test_file)
-                all_results.extend(results)
-                progress.remove_task(task)
+        console.print(f"[dim]Running with parallelism={parallelism}...[/dim]")
+        
+        # Run all test files in parallel
+        async def run_file(test_file):
+            return await self.run_test_file(test_file, semaphore)
+        
+        file_results = await asyncio.gather(*[run_file(f) for f in test_files])
+        
+        for results in file_results:
+            all_results.extend(results)
         
         # Calculate summary
         total = len(all_results)

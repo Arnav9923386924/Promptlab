@@ -461,11 +461,17 @@ def setup(
 def run_quick(
     mode: str = typer.Argument(..., help="Mode: 'roleplay' or 'performance'"),
     samples: int = typer.Option(10, "--samples", "-n", help="Number of test samples"),
+    role: str = typer.Option(None, "--role", "-r", help="Role for dynamic test generation"),
 ):
-    """Quick test - run roleplay or performance tests."""
+    """Quick test - run roleplay or performance tests.
+    
+    For roleplay with dynamic generation:
+      promptlab run roleplay --role "You are a Python expert"
+    """
     import asyncio
     from promptlab.utils.config import load_config
     from promptlab.core.runner import TestRunner, print_results
+    from promptlab.mcp_servers.llm_runner.runner import LLMRunner
     
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
@@ -476,7 +482,55 @@ def run_quick(
         console.print("[red]✗ Run 'promptlab setup' first[/red]")
         raise typer.Exit(1)
     
+    config = load_config(config_path)
     tests_dir.mkdir(exist_ok=True)
+    
+    # If --role is provided for roleplay, generate tests dynamically
+    if mode == "roleplay" and role:
+        from promptlab.utils.test_generator import generate_tests_for_role, clean_generated_tests
+        
+        # Determine generator model
+        generator_model = config.models.generator or config.models.default
+        if not config.models.generator:
+            console.print(f"[yellow]No generator model set. Using default: {generator_model}[/yellow]")
+            console.print("[dim]Tip: Set 'generator' in models config for better results[/dim]")
+        
+        console.print(Panel(
+            f"[bold]Role:[/bold] {role}\n"
+            f"[bold]Generator:[/bold] {generator_model}\n"
+            f"[bold]Target:[/bold] {config.models.default}",
+            title="🎭 Dynamic Roleplay Test Generation",
+            border_style="blue",
+        ))
+        
+        # Clean old generated tests
+        clean_generated_tests(tests_dir)
+        
+        # Create LLM runner and generate tests
+        llm_runner = LLMRunner({
+            "default": config.models.default,
+            "providers": {
+                name: {"endpoint": p.endpoint, "api_key": p.api_key}
+                for name, p in config.models.providers.items()
+            },
+        })
+        
+        generated_files = asyncio.run(
+            generate_tests_for_role(role, llm_runner, generator_model, tests_dir)
+        )
+        
+        if not generated_files:
+            console.print("[red]✗ Failed to generate tests[/red]")
+            raise typer.Exit(1)
+        
+        console.print(f"\n[green]✓ Generated {len(generated_files)} test file(s)[/green]\n")
+        
+        # Run the generated tests
+        runner = TestRunner(config)
+        test_paths = [f"tests/{f.name}" for f in generated_files]
+        run_result = asyncio.run(runner.run_all(tests_dir, test_paths))
+        print_results(run_result)
+        return
     
     if mode == "performance":
         # Download and run benchmark
@@ -498,56 +552,63 @@ def run_quick(
         print_results(run_result)
         
     elif mode == "roleplay":
-        # Create simple roleplay test
+        # Find all roleplay tests (exclude benchmark files)
+        benchmark_prefixes = ["gsm8k", "mmlu", "hellaswag", "truthfulqa"]
+        
+        roleplay_files = []
+        if tests_dir.exists():
+            for f in tests_dir.glob("*.yaml"):
+                # Skip benchmark files
+                if not any(f.name.startswith(prefix) for prefix in benchmark_prefixes):
+                    roleplay_files.append(f.name)
+        
+        if not roleplay_files:
+            console.print("[yellow]No roleplay tests found. Creating sample tests...[/yellow]")
+            # Create sample roleplay tests
+            sample_tests = {
+                "metadata": {"name": "Sample Roleplay Tests"},
+                "defaults": {"temperature": 0},
+                "cases": [
+                    {
+                        "id": "sentiment-positive",
+                        "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: I love this product!",
+                        "assertions": [{"type": "regex", "pattern": "(?i)positive"}]
+                    },
+                    {
+                        "id": "sentiment-negative",
+                        "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: This is terrible!",
+                        "assertions": [{"type": "regex", "pattern": "(?i)negative"}]
+                    },
+                    {
+                        "id": "support-billing",
+                        "prompt": "Classify into BILLING, TECHNICAL, or SALES. Reply one word.\nMessage: I need a refund.",
+                        "assertions": [{"type": "regex", "pattern": "(?i)billing"}]
+                    },
+                    {
+                        "id": "instruction-follow",
+                        "prompt": "Say only the word 'hello'. Nothing else.",
+                        "assertions": [{"type": "regex", "pattern": "(?i)hello"}]
+                    },
+                ]
+            }
+            sample_path = tests_dir / "roleplay_sample.yaml"
+            with open(sample_path, "w", encoding="utf-8") as f:
+                yaml.dump(sample_tests, f, default_flow_style=False)
+            roleplay_files = ["roleplay_sample.yaml"]
+        
         console.print(Panel(
             "[bold]Mode:[/bold] Roleplay Testing\n"
-            "[bold]Tests:[/bold] Sentiment, Support Routing\n"
-            f"[bold]Samples:[/bold] Quick tests",
+            f"[bold]Test Files:[/bold] {len(roleplay_files)}\n"
+            f"[bold]Files:[/bold] {', '.join(roleplay_files[:5])}{'...' if len(roleplay_files) > 5 else ''}",
             title="🎭 Running Roleplay Test",
             border_style="blue",
         ))
         
-        # Create quick roleplay tests
-        roleplay_tests = {
-            "metadata": {"name": "Quick Roleplay Tests"},
-            "defaults": {"temperature": 0},
-            "cases": [
-                {
-                    "id": "sentiment-positive",
-                    "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: I love this product!",
-                    "assertions": [{"type": "regex", "pattern": "(?i)positive"}]
-                },
-                {
-                    "id": "sentiment-negative",
-                    "prompt": "Classify as POSITIVE, NEGATIVE, or NEUTRAL. Reply one word.\nText: This is terrible!",
-                    "assertions": [{"type": "regex", "pattern": "(?i)negative"}]
-                },
-                {
-                    "id": "support-billing",
-                    "prompt": "Classify into BILLING, TECHNICAL, or SALES. Reply one word.\nMessage: I need a refund.",
-                    "assertions": [{"type": "regex", "pattern": "(?i)billing"}]
-                },
-                {
-                    "id": "support-tech",
-                    "prompt": "Classify into BILLING, TECHNICAL, or SALES. Reply one word.\nMessage: The app crashes.",
-                    "assertions": [{"type": "regex", "pattern": "(?i)technical"}]
-                },
-                {
-                    "id": "instruction-follow",
-                    "prompt": "Say only the word 'hello'. Nothing else.",
-                    "assertions": [{"type": "regex", "pattern": "(?i)hello"}]
-                },
-            ]
-        }
-        
-        roleplay_path = tests_dir / "quick_roleplay.yaml"
-        with open(roleplay_path, "w", encoding="utf-8") as f:
-            yaml.dump(roleplay_tests, f, default_flow_style=False)
-        
-        # Run tests
+        # Run all roleplay tests
         config = load_config(config_path)
         runner = TestRunner(config)
-        run_result = asyncio.run(runner.run_all(tests_dir, ["tests/quick_roleplay.yaml"]))
+        test_paths = [f"tests/{f}" for f in roleplay_files]
+        run_result = asyncio.run(runner.run_all(tests_dir, test_paths))
         print_results(run_result)
         
     else:

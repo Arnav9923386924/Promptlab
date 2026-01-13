@@ -17,6 +17,7 @@ class ProviderConfig(BaseModel):
 class ModelsConfig(BaseModel):
     """Models configuration."""
     default: str = "ollama/llama3.1:8b"
+    generator: Optional[str] = None  # LLM for generating test cases
     providers: dict[str, ProviderConfig] = {}
 
 
