@@ -1,0 +1,77 @@
+cases:
+- assertions:
+  - type: contains
+    value: '18'
+  id: gsm8k-1
+  prompt: 'Solve this math problem. Give the final numerical answer on its own line
+    at the end.
+
+
+    Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning
+    and bakes muffins for her friends every day with four. She sells the remainder
+    at the farmers'' market daily for $2 per fresh duck egg. How much in dollars does
+    she make every day at the farmers'' market?'
+  tags:
+  - math
+  - reasoning
+- assertions:
+  - type: contains
+    value: '3'
+  id: gsm8k-2
+  prompt: 'Solve this math problem. Give the final numerical answer on its own line
+    at the end.
+
+
+    A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts
+    in total does it take?'
+  tags:
+  - math
+  - reasoning
+- assertions:
+  - type: contains
+    value: '70000'
+  id: gsm8k-3
+  prompt: 'Solve this math problem. Give the final numerical answer on its own line
+    at the end.
+
+
+    Josh decides to try flipping a house.  He buys a house for $80,000 and then puts
+    in $50,000 in repairs.  This increased the value of the house by 150%.  How much
+    profit did he make?'
+  tags:
+  - math
+  - reasoning
+- assertions:
+  - type: contains
+    value: '540'
+  id: gsm8k-4
+  prompt: 'Solve this math problem. Give the final numerical answer on its own line
+    at the end.
+
+
+    James decides to run 3 sprints 3 times a week.  He runs 60 meters each sprint.  How
+    many total meters does he run a week?'
+  tags:
+  - math
+  - reasoning
+- assertions:
+  - type: contains
+    value: '20'
+  id: gsm8k-5
+  prompt: 'Solve this math problem. Give the final numerical answer on its own line
+    at the end.
+
+
+    Every day, Wendi feeds each of her chickens three cups of mixed chicken feed,
+    containing seeds, mealworms and vegetables to help keep them healthy.  She gives
+    the chickens their feed in three separate meals. In the morning, she gives her
+    flock of chickens 15 cups of feed.  In the afternoon, she gives her chickens another
+    25 cups of feed.  How many cups of feed does she need to give her chickens in
+    the final meal of the day if the size of Wendi''s flock is 20 chickens?'
+  tags:
+  - math
+  - reasoning
+defaults:
+  temperature: 0
+metadata:
+  name: GSM8K - Math Reasoning

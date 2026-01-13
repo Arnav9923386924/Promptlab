@@ -345,6 +345,48 @@ def ci_setup():
     ))
 
 
+@app.command("benchmark")
+def benchmark(
+    dataset: str = typer.Argument(..., help="Dataset: mmlu, truthfulqa, gsm8k, hellaswag, or 'all'"),
+    samples: int = typer.Option(20, "--samples", "-n", help="Max samples per dataset"),
+):
+    """Download standard LLM benchmarks from HuggingFace."""
+    from promptlab.utils.datasets import AVAILABLE_DATASETS
+    
+    cwd = Path.cwd()
+    tests_dir = cwd / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    
+    console.print(Panel(
+        f"[bold]Dataset:[/bold] {dataset}\n"
+        f"[bold]Samples:[/bold] {samples} per dataset\n"
+        f"[bold]Output:[/bold] {tests_dir}/",
+        title="📊 Downloading Benchmark",
+        border_style="blue",
+    ))
+    
+    total = 0
+    
+    if dataset == "all":
+        for name, importer in AVAILABLE_DATASETS.items():
+            try:
+                count = importer(tests_dir, max_samples=samples)
+                total += count
+            except Exception as e:
+                console.print(f"[red]Error importing {name}: {e}[/red]")
+    elif dataset in AVAILABLE_DATASETS:
+        total = AVAILABLE_DATASETS[dataset](tests_dir, max_samples=samples)
+    else:
+        console.print(f"[red]Unknown dataset: {dataset}[/red]")
+        console.print(f"Available: {', '.join(AVAILABLE_DATASETS.keys())}, all")
+        raise typer.Exit(1)
+    
+    console.print()
+    console.print(f"[green]✓ Imported {total} test cases total[/green]")
+    console.print(f"[cyan]Run: promptlab test[/cyan]")
+
+
 if __name__ == "__main__":
     app()
+
 
