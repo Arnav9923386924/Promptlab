@@ -1,0 +1,31 @@
+# PromptLab Example Configuration
+# Copy this to promptlab.yaml and customize for your setup
+version: 1
+
+models:
+  # The LLM to test
+  default: ollama/llama3.1:8b
+  
+  # LLM for generating test cases (optional, falls back to default)
+  generator: ollama/llama3.1:8b
+  
+  providers:
+    ollama:
+      endpoint: http://localhost:11434
+    # Uncomment to use OpenRouter:
+    # openrouter:
+    #   api_key: your-openrouter-api-key
+
+# LLM Council for multi-model evaluation
+council:
+  enabled: true
+  mode: fast  # Options: full | fast | vote
+  members:
+    - ollama/llama3.1:8b
+    - ollama/llama3.2:3b  # Use any models you have installed
+  chairman: ollama/llama3.1:8b  # Makes final decision
+
+# Test execution settings
+testing:
+  parallelism: 4      # Number of parallel tests
+  timeout_ms: 30000   # Test timeout in milliseconds

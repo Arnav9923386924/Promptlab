@@ -1,0 +1,23 @@
+# Council Test - Tests that the LLM Council is evaluating responses
+metadata:
+  name: Council Evaluation Tests
+  description: Tests that trigger the LLM Council for multi-model evaluation
+
+defaults:
+  model: ollama/llama3.1:8b
+  temperature: 0
+
+cases:
+  - id: council-quality-check
+    prompt: "Explain what Python decorators are in 2 sentences."
+    assertions:
+      - type: council_judge
+        criteria: "The response should correctly explain Python decorators, mentioning they modify function behavior."
+        min_score: 0.7
+
+  - id: council-accuracy-check
+    prompt: "What is 15 + 27?"
+    assertions:
+      - type: council_judge
+        criteria: "The response must contain the correct answer: 42."
+        min_score: 0.8
