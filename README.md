@@ -10,10 +10,48 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/MCP-powered-purple.svg" alt="MCP">
   <img src="https://img.shields.io/badge/council-evaluation-gold.svg" alt="Council">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT">
 </p>
+
+---
+
+## ⚡ Quick Start (60 seconds)
+
+### 1. Install
+
+```bash
+pip install promptlab
+```
+
+### 2. Setup (Choose One)
+
+**Using Ollama (Local, Free):**
+```bash
+promptlab setup ollama
+```
+
+**Using OpenRouter (Cloud):**
+```bash
+promptlab setup openrouter --api-key YOUR_KEY
+```
+
+### 3. Run Tests
+
+**Test with existing YAML files:**
+```bash
+promptlab run roleplay
+```
+
+**Dynamic test generation (auto-creates tests for any role):**
+```bash
+promptlab run roleplay --role "You are a Python expert"
+```
+
+**Run HuggingFace benchmarks:**
+```bash
+promptlab run performance
+```
 
 ---
 
@@ -30,350 +68,120 @@ You're building an LLM-powered app. You have prompts in production. You make cha
 
 ---
 
-## 🏛️ How We're Different
+## 🔥 Key Features
 
-### PromptLab vs LLM Arenas (Chatbot Arena, LMSYS)
-
-| | LLM Arenas | PromptLab |
-|---|------------|-----------|
-| **Question answered** | "Which model is best?" | "Did my code change break my app?" |
-| **Who uses it** | Researchers | App developers |
-| **Test data** | Generic benchmarks | YOUR specific use cases |
-| **Goal** | Global model ranking | Prevent YOUR regressions |
-| **When it runs** | Crowdsourced, async | On every git push |
-| **Output** | Leaderboard | CI/CD pass/fail |
-
-> **Arenas tell you which model to use.**  
-> **PromptLab tells you if your prompts still work.**
-
----
-
-## 🔑 Core Concepts
-
-### 1. Multi-Stage Pipeline Testing
-
-LLM apps aren't just one prompt → one response. They're pipelines:
-
-```
-User Query
-    │
-    ▼
-┌──────────────────────┐
-│ STAGE 1: Intent      │ ◄── TEST: Classification accuracy
-│ Classification       │
-└──────────────────────┘
-    │
-    ▼
-┌──────────────────────┐
-│ STAGE 2: RAG         │ ◄── TEST: Retrieval relevance
-│ Retrieval            │
-└──────────────────────┘
-    │
-    ▼
-┌──────────────────────┐
-│ STAGE 3: Response    │ ◄── TEST: Quality, safety, accuracy
-│ Generation           │
-└──────────────────────┘
-    │
-    ▼
-Final Response
-```
-
-**PromptLab injects test checkpoints at each stage — not just the final output.**
-
----
-
-### 2. Regression Detection Across Code Changes
-
-```
-git commit: "Updated system prompt for friendlier tone"
-
-PromptLab runs automatically:
-
-  v1.0 (baseline)      →  Pass rate: 94%
-  v1.1 (your change)   →  Pass rate: 87%  ⚠️ REGRESSION DETECTED
-  
-  Failing tests:
-  - refund-request: Expected empathy, got formal response
-  - complaint-handling: Tone mismatch
-  
-  ❌ PR blocked until fixed
-```
-
----
-
-### 3. LLM Council Evaluation (Inspired by Karpathy)
-
-Single LLM-as-judge = biased toward its own style.
-
-**LLM Council = multiple models deliberate, cross-critique, reach consensus.**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    LLM COUNCIL PROCESS                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  STAGE 1: Independent Judging                               │
-│  ┌────────┐  ┌────────┐  ┌────────┐                        │
-│  │ Claude │  │ GPT-4  │  │ Llama  │                        │
-│  │ 0.82   │  │ 0.75   │  │ 0.78   │                        │
-│  └────────┘  └────────┘  └────────┘                        │
-│                     │                                       │
-│  STAGE 2: Cross-Critique (Anonymized)                       │
-│  "Judge A's score seems high because..."                    │
-│  "Judge B missed the context about..."                      │
-│                     │                                       │
-│  STAGE 3: Chairman Synthesis                                │
-│  ┌─────────────────────────────────────┐                   │
-│  │ Final Score: 0.78                   │                   │
-│  │ Confidence: HIGH                    │                   │
-│  │ Consensus: "Response is accurate    │                   │
-│  │ but could be more concise"          │                   │
-│  └─────────────────────────────────────┘                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**When council members disagree → Test flagged for human review.**
+| Feature | Description |
+|---------|-------------|
+| **Dynamic Test Generation** | `--role "You are X"` → Auto-generates relevant tests |
+| **LLM Council** | Multiple models evaluate responses, reach consensus |
+| **HuggingFace Benchmarks** | Import MMLU, GSM8K, TruthfulQA with one command |
+| **Parallel Execution** | Run tests concurrently for speed |
+| **OpenRouter + Ollama** | Use local or cloud models seamlessly |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-your-project/
-├── promptlab.yaml              # Configuration
-├── prompts/                    # Your prompt templates
-│   ├── intent_classifier.txt
-│   ├── rag_query.txt
-│   └── response_generator.txt
-├── tests/
-│   ├── pipeline/
-│   │   ├── stage1_intent.yaml  # Intent classification tests
-│   │   ├── stage2_rag.yaml     # RAG retrieval tests
-│   │   └── stage3_response.yaml
-│   ├── regression/
-│   │   └── prod_failures.yaml  # Captured from production
-│   └── edge_cases/
-│       └── sarcasm.yaml
-└── .promptlab/                 # Local state (gitignore)
-    ├── baselines/
-    └── runs/
+promptlab/
+├── promptlab.yaml          # Your config (API keys, models)
+├── promptlab.example.yaml  # Example config to copy
+├── tests/                  # Test YAML files
+│   ├── sentiment.yaml
+│   ├── code_review.yaml
+│   ├── council_test.yaml   # Tests using LLM Council
+│   └── generated_*.yaml    # Auto-generated tests
+└── src/                    # Source code
 ```
 
 ---
 
-## ⚡ Quick Start
+## ⚙️ Configuration
 
-### 1. Install
-
-```bash
-pip install promptlab
-```
-
-### 2. Initialize
-
-```bash
-cd your-llm-project
-promptlab init
-```
-
-### 3. Configure Council
+Copy `promptlab.example.yaml` to `promptlab.yaml` and customize:
 
 ```yaml
 # promptlab.yaml
 version: 1
 
-# Models for running your prompts
 models:
-  default: ollama/llama3.1:8b
+  default: ollama/llama3.1:8b           # Model to test
+  generator: ollama/llama3.1:8b         # Model for generating tests
+  
   providers:
     ollama:
       endpoint: http://localhost:11434
     openrouter:
-      api_key: ${OPENROUTER_API_KEY}
+      api_key: your-openrouter-api-key
 
-# LLM Council for evaluation
 council:
   enabled: true
   mode: fast  # full | fast | vote
   members:
-    - ollama/llama3.1:8b      # Free, local
-    - ollama/mistral:7b       # Free, local
-    - openrouter/gpt-4o-mini  # Cheap, diverse perspective
+    - ollama/llama3.1:8b
+    - ollama/llama3.2:3b
   chairman: ollama/llama3.1:8b
 
-# Pipeline stages to test
-pipeline:
-  stages:
-    - name: intent
-      prompt_file: prompts/intent_classifier.txt
-    - name: retrieval
-      prompt_file: prompts/rag_query.txt
-    - name: response
-      prompt_file: prompts/response_generator.txt
+testing:
+  parallelism: 4
+  timeout_ms: 30000
 ```
 
-### 4. Write Tests
+---
+
+## 🏛️ LLM Council (Inspired by Karpathy)
+
+Single LLM-as-judge = biased toward its own style.
+
+**LLM Council = multiple models deliberate, cross-critique, reach consensus.**
+
+```
+STAGE 1: Independent Judging
+┌────────┐  ┌────────┐  ┌────────┐
+│ Llama  │  │ Gemma  │  │ Mistral│
+│ 0.82   │  │ 0.75   │  │ 0.78   │
+└────────┘  └────────┘  └────────┘
+                │
+STAGE 2: Cross-Critique (Optional)
+"Judge A's score seems high because..."
+                │
+STAGE 3: Chairman Synthesis
+┌─────────────────────────────────────┐
+│ Final Score: 0.78                   │
+│ Confidence: HIGH                    │
+│ Consensus: "Accurate but verbose"   │
+└─────────────────────────────────────┘
+```
+
+### Council Test Example:
 
 ```yaml
-# tests/pipeline/stage1_intent.yaml
-stage: intent
-
+# tests/council_test.yaml
 cases:
-  - id: support-request
-    input: "I need help with my order"
+  - id: quality-check
+    prompt: "Explain Python decorators in 2 sentences."
     assertions:
-      - type: contains
-        value: SUPPORT
-        
-  - id: sales-inquiry
-    input: "What's the pricing for enterprise?"
-    assertions:
-      - type: contains
-        value: SALES
       - type: council_judge
-        criteria: "Correctly identifies sales intent"
+        criteria: "Response correctly explains decorators"
         min_score: 0.7
 ```
 
-### 5. Run Tests
-
-```bash
-promptlab test
-```
-
-```
-  tests/pipeline/stage1_intent.yaml
-    ✓ support-request (124ms)
-    ✓ sales-inquiry (156ms)
-      Council: 3/3 agreed (avg: 0.85)
-      
-  tests/pipeline/stage3_response.yaml
-    ✓ greeting (234ms)
-    ⚠️ refund-request
-      Council: SPLIT (2/3)
-      → Flagged for human review
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Results: 8/9 passed | 1 needs review
- Regressions vs main: 0
- Cost: $0.004
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
 ---
 
-## 🔄 Practical Test Generation
+## 📊 Free OpenRouter Models
 
-**You don't write hundreds of YAML files manually.**
+For users without paid API access:
 
-### Import from CSV (Business team can contribute!)
+| Model ID | Provider |
+|----------|----------|
+| `openrouter/meta-llama/llama-3.1-8b-instruct:free` | Meta |
+| `openrouter/google/gemma-2-9b-it:free` | Google |
+| `openrouter/mistralai/mistral-7b-instruct:free` | Mistral |
 
-```bash
-promptlab import tests.csv
-```
-
-```csv
-input,expected_label,stage,tags
-"I need help",SUPPORT,intent,basic
-"What's your price?",SALES,intent,basic
-"This sucks",COMPLAINT,intent,edge-case
-```
-
-### Capture from Production Logs
-
-```bash
-promptlab capture --from-logs ./logs/llm_calls.jsonl
-```
-
-Automatically creates test cases from successful production calls.
-
-### Generate with LLM Assistance
-
-```bash
-promptlab generate --examples "I love it -> POSITIVE, I hate it -> NEGATIVE"
-```
-
-LLM generates 20 similar test cases automatically.
-
-### Golden Test Pattern
-
-```bash
-promptlab golden create
-```
-
-Interactive: Run prompts, review outputs, approve as "golden" expected values.
-
----
-
-## 📊 Regression Workflow
-
-### Create Baseline
-
-```bash
-promptlab baseline create --tag main
-```
-
-### Test Against Baseline
-
-```bash
-promptlab test --baseline main
-```
-
-### CI/CD Integration
-
+Use in config:
 ```yaml
-# .github/workflows/prompt-tests.yml
-name: Prompt Tests
-
-on:
-  pull_request:
-    paths: ['prompts/**', 'tests/**']
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install promptlab
-      - run: |
-          curl -fsSL https://ollama.ai/install.sh | sh
-          ollama pull llama3.1:8b
-      - run: promptlab test --ci --baseline main
+generator: openrouter/google/gemma-2-9b-it:free
 ```
-
-**Exit codes:**
-- `0` = All passed
-- `1` = Failures or regressions
-- `2` = Config error
-
----
-
-## 🏗️ Architecture (MCP-Based)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      PromptLab CLI                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  mcp-llm-runner │  │  mcp-council    │  │  mcp-pipeline   │
-├─────────────────┤  ├─────────────────┤  ├─────────────────┤
-│ • Ollama        │  │ • Stage 1: Judge│  │ • Stage routing │
-│ • OpenRouter    │  │ • Stage 2: Crit │  │ • Checkpoint    │
-│ • Any provider  │  │ • Stage 3: Synth│  │   injection     │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-```
-
-**Why MCP?**
-- Swap models without changing test code
-- Add new evaluation metrics as plugins
-- Pipeline stages are composable
-- Servers are shareable across projects
 
 ---
 
@@ -381,50 +189,88 @@ jobs:
 
 | Command | Description |
 |---------|-------------|
-| `promptlab init` | Initialize project |
-| `promptlab test` | Run all tests |
-| `promptlab test --stage intent` | Test specific pipeline stage |
-| `promptlab test --baseline main` | Compare against baseline |
-| `promptlab test --watch` | Re-run on file changes |
-| `promptlab baseline create --tag v1` | Save current as baseline |
-| `promptlab import data.csv` | Import test cases from CSV |
-| `promptlab capture --from-logs` | Generate tests from logs |
-| `promptlab council explain <id>` | Show council deliberation |
+| `promptlab init` | Initialize project with example config |
+| `promptlab setup ollama` | Quick setup for Ollama |
+| `promptlab setup openrouter -k KEY` | Quick setup for OpenRouter |
+| `promptlab test` | Run all YAML tests |
+| `promptlab test tests/file.yaml` | Run specific test file |
+| `promptlab run roleplay` | Run existing roleplay tests |
+| `promptlab run roleplay --role "..."` | Generate + run tests for role |
+| `promptlab run performance` | Run HuggingFace benchmarks |
+| `promptlab benchmark gsm8k` | Download GSM8K benchmark |
 
 ---
 
 ## 🎚️ Council Modes
 
-| Mode | Stages | Cost | Use Case |
-|------|--------|------|----------|
-| `full` | All 3 | High | Critical/production tests |
+| Mode | Stages | Speed | Use Case |
+|------|--------|-------|----------|
+| `full` | All 3 | Slow | Critical tests |
 | `fast` | 2 (skip critique) | Medium | Regular testing |
-| `vote` | Just pass/fail | Low | Quick sanity checks |
+| `vote` | Just majority | Fast | Quick sanity checks |
+
+---
+
+## 📊 HuggingFace Benchmarks
+
+Download and test with standard LLM benchmarks:
+
+```bash
+# Download benchmark
+promptlab benchmark gsm8k --samples 20
+
+# Run performance test
+promptlab run performance
+```
+
+**Available benchmarks:** `gsm8k`, `mmlu`, `truthfulqa`, `hellaswag`
+
+---
+
+## 🔄 CI/CD Integration
 
 ```yaml
-# Per-test override
-assertions:
-  - type: council_judge
-    mode: full  # Override for this critical test
-    criteria: "..."
+# .github/workflows/prompt-tests.yml
+name: Prompt Tests
+
+on:
+  pull_request:
+    paths: ['tests/**', 'promptlab.yaml']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install promptlab
+      - run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull llama3.1:8b
+      - run: promptlab test --ci
 ```
 
 ---
 
 ## 🚀 Roadmap
 
-- [ ] **Phase 1:** Core framework + Ollama integration
-- [ ] **Phase 2:** Council evaluation engine
-- [ ] **Phase 3:** Pipeline stage testing
-- [ ] **Phase 4:** CI/CD + baseline management
-- [ ] **Phase 5:** Import/capture tools
-- [ ] **Phase 6:** VS Code extension
+- [x] Core framework + Ollama integration
+- [x] Council evaluation engine
+- [x] Dynamic test generation
+- [x] HuggingFace benchmark import
+- [x] Parallel test execution
+- [ ] VS Code extension
+- [ ] Production log capture
 
 ---
 
 ## 🤝 Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md)
+PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
