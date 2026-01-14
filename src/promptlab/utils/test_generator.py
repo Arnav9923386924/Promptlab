@@ -1,6 +1,12 @@
-"""Dynamic test generator - Uses LLM to generate role-specific test cases."""
+"""Dynamic test generator - Uses LLM to generate role-specific test cases.
+
+This module provides functionality to dynamically generate test YAML files
+based on a given role/persona using an LLM. It supports multiple LLM providers
+and includes fallback generation when JSON parsing fails.
+"""
 
 import json
+import re
 import yaml
 from pathlib import Path
 from typing import Optional
@@ -79,8 +85,6 @@ async def generate_tests_for_role(
         response_text = result.text.strip()
         
         # Try multiple methods to extract JSON
-        import re
-        
         # Method 1: Find JSON block in markdown
         if "```json" in response_text:
             match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
