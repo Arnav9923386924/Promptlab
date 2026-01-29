@@ -176,11 +176,25 @@ def import_gsm8k(output_dir: Path, max_samples: int = 50) -> int:
         else:
             final_answer = answer.strip()
         
+        # Use chain-of-thought prompting with clear instructions
+        prompt = f"""Solve this math problem step by step. Show your reasoning clearly.
+
+Problem: {question}
+
+Instructions:
+1. Identify what the question is asking for
+2. List all the given information
+3. Work through the calculation step by step
+4. Double-check your arithmetic
+5. State your final answer as just a number on its own line at the end
+
+Think carefully and verify each step before proceeding to the next."""
+
         cases.append({
             "id": f"gsm8k-{i+1}",
-            "prompt": f"Solve this math problem. Give the final numerical answer on its own line at the end.\n\n{question}",
+            "prompt": prompt,
             "assertions": [
-                {"type": "contains", "value": final_answer}
+                {"type": "contains_number", "value": final_answer}
             ],
             "tags": ["math", "reasoning"]
         })

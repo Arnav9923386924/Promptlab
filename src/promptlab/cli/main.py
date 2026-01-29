@@ -100,8 +100,8 @@ def init(
     """Initialize PromptLab in the current directory."""
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
-    tests_dir = cwd / "tests"
-    example_test_path = tests_dir / "example.yaml"
+    temp_dir = cwd / "temp"
+    example_test_path = temp_dir / "example.yaml"
     promptlab_dir = cwd / ".promptlab"
     
     # Check if already initialized
@@ -113,14 +113,14 @@ def init(
     config_path.write_text(DEFAULT_CONFIG)
     console.print(f"[green]✓[/green] Created {config_path.name}")
     
-    # Create tests directory
-    tests_dir.mkdir(exist_ok=True)
-    console.print(f"[green]✓[/green] Created {tests_dir.name}/ directory")
+    # Create temp directory
+    temp_dir.mkdir(exist_ok=True)
+    console.print(f"[green]✓[/green] Created {temp_dir.name}/ directory")
     
     # Create example test
     if not example_test_path.exists() or force:
         example_test_path.write_text(EXAMPLE_TEST)
-        console.print(f"[green]✓[/green] Created {tests_dir.name}/example.yaml")
+        console.print(f"[green]✓[/green] Created {temp_dir.name}/example.yaml")
     
     # Create .promptlab directory
     promptlab_dir.mkdir(exist_ok=True)
@@ -160,7 +160,7 @@ def test(
     
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
-    tests_dir = cwd / "tests"
+    temp_dir = cwd / "temp"
     
     # Check if initialized
     if not config_path.exists():
@@ -186,7 +186,7 @@ def test(
     runner = TestRunner(config)
     
     try:
-        run = asyncio.run(runner.run_all(tests_dir, files, stage))
+        run = asyncio.run(runner.run_all(temp_dir, files, stage))
         print_results(run)
         
         # Exit with appropriate code
@@ -267,9 +267,9 @@ def import_data(
     
     # Determine output path
     if output:
-        output_path = cwd / "tests" / output
+        output_path = cwd / "temp" / output
     else:
-        output_path = cwd / "tests" / f"{source_path.stem}.yaml"
+        output_path = cwd / "temp" / f"{source_path.stem}.yaml"
     
     # Import based on format
     if format == "csv":
@@ -354,13 +354,13 @@ def benchmark(
     from promptlab.utils.datasets import AVAILABLE_DATASETS
     
     cwd = Path.cwd()
-    tests_dir = cwd / "tests"
-    tests_dir.mkdir(exist_ok=True)
+    temp_dir = cwd / "temp"
+    temp_dir.mkdir(exist_ok=True)
     
     console.print(Panel(
         f"[bold]Dataset:[/bold] {dataset}\n"
         f"[bold]Samples:[/bold] {samples} per dataset\n"
-        f"[bold]Output:[/bold] {tests_dir}/",
+        f"[bold]Output:[/bold] {temp_dir}/",
         title="📊 Downloading Benchmark",
         border_style="blue",
     ))
@@ -370,12 +370,12 @@ def benchmark(
     if dataset == "all":
         for name, importer in AVAILABLE_DATASETS.items():
             try:
-                count = importer(tests_dir, max_samples=samples)
+                count = importer(temp_dir, max_samples=samples)
                 total += count
             except Exception as e:
                 console.print(f"[red]Error importing {name}: {e}[/red]")
     elif dataset in AVAILABLE_DATASETS:
-        total = AVAILABLE_DATASETS[dataset](tests_dir, max_samples=samples)
+        total = AVAILABLE_DATASETS[dataset](temp_dir, max_samples=samples)
     else:
         console.print(f"[red]Unknown dataset: {dataset}[/red]")
         console.print(f"Available: {', '.join(AVAILABLE_DATASETS.keys())}, all")
@@ -415,7 +415,7 @@ def setup(
     """Quick setup - configure API keys and model in one command."""
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
-    tests_dir = cwd / "tests"
+    temp_dir = cwd / "temp"
     
     # Determine config based on provider
     if provider == "openrouter":
@@ -443,7 +443,7 @@ def setup(
     )
     
     config_path.write_text(config_content)
-    tests_dir.mkdir(exist_ok=True)
+    temp_dir.mkdir(exist_ok=True)
     
     console.print(Panel(
         f"[bold]Provider:[/bold] {provider}\n"
@@ -475,7 +475,7 @@ def run_quick(
     
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
-    tests_dir = cwd / "tests"
+    temp_dir = cwd / "temp"
     
     # Check setup
     if not config_path.exists():
@@ -483,7 +483,7 @@ def run_quick(
         raise typer.Exit(1)
     
     config = load_config(config_path)
-    tests_dir.mkdir(exist_ok=True)
+    temp_dir.mkdir(exist_ok=True)
     
     # If --role is provided for roleplay, generate tests dynamically
     if mode == "roleplay" and role:
@@ -504,7 +504,7 @@ def run_quick(
         ))
         
         # Clean old generated tests
-        clean_generated_tests(tests_dir)
+        clean_generated_tests(temp_dir)
         
         # Create LLM runner and generate tests
         llm_runner = LLMRunner({
@@ -516,7 +516,7 @@ def run_quick(
         })
         
         generated_files = asyncio.run(
-            generate_tests_for_role(role, llm_runner, generator_model, tests_dir)
+            generate_tests_for_role(role, llm_runner, generator_model, temp_dir)
         )
         
         if not generated_files:
@@ -527,8 +527,8 @@ def run_quick(
         
         # Run the generated tests
         runner = TestRunner(config)
-        test_paths = [f"tests/{f.name}" for f in generated_files]
-        run_result = asyncio.run(runner.run_all(tests_dir, test_paths))
+        test_paths = [f"temp/{f.name}" for f in generated_files]
+        run_result = asyncio.run(runner.run_all(temp_dir, test_paths))
         print_results(run_result)
         return
     
@@ -543,12 +543,12 @@ def run_quick(
         ))
         
         from promptlab.utils.datasets import import_gsm8k
-        import_gsm8k(tests_dir, max_samples=samples)
+        import_gsm8k(temp_dir, max_samples=samples)
         
         # Run tests
         config = load_config(config_path)
         runner = TestRunner(config)
-        run_result = asyncio.run(runner.run_all(tests_dir, ["tests/gsm8k.yaml"]))
+        run_result = asyncio.run(runner.run_all(temp_dir, ["temp/gsm8k.yaml"]))
         print_results(run_result)
         
     elif mode == "roleplay":
@@ -556,8 +556,8 @@ def run_quick(
         benchmark_prefixes = ["gsm8k", "mmlu", "hellaswag", "truthfulqa"]
         
         roleplay_files = []
-        if tests_dir.exists():
-            for f in tests_dir.glob("*.yaml"):
+        if temp_dir.exists():
+            for f in temp_dir.glob("*.yaml"):
                 # Skip benchmark files
                 if not any(f.name.startswith(prefix) for prefix in benchmark_prefixes):
                     roleplay_files.append(f.name)
@@ -591,7 +591,7 @@ def run_quick(
                     },
                 ]
             }
-            sample_path = tests_dir / "roleplay_sample.yaml"
+            sample_path = temp_dir / "roleplay_sample.yaml"
             with open(sample_path, "w", encoding="utf-8") as f:
                 yaml.dump(sample_tests, f, default_flow_style=False)
             roleplay_files = ["roleplay_sample.yaml"]
@@ -607,8 +607,8 @@ def run_quick(
         # Run all roleplay tests
         config = load_config(config_path)
         runner = TestRunner(config)
-        test_paths = [f"tests/{f}" for f in roleplay_files]
-        run_result = asyncio.run(runner.run_all(tests_dir, test_paths))
+        test_paths = [f"temp/{f}" for f in roleplay_files]
+        run_result = asyncio.run(runner.run_all(temp_dir, test_paths))
         print_results(run_result)
         
     else:
@@ -617,8 +617,92 @@ def run_quick(
         raise typer.Exit(1)
 
 
+@app.command("scrape")
+def scrape_data(
+    domain: str = typer.Argument(..., help="Domain/topic to scrape (e.g., 'legal contracts', 'medical diagnosis')"),
+    urls: list[str] = typer.Option(None, "--url", "-u", help="Specific URLs to scrape (can be used multiple times)"),
+    num_pages: int = typer.Option(10, "--pages", "-p", help="Number of pages to scrape"),
+    output_type: str = typer.Option("all", "--output", "-o", help="Output type: benchmark, roleplay, finetune, all"),
+    keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary scraped files (for debugging)"),
+):
+    """Scrape web content and generate test cases for a domain.
+    
+    Examples:
+      promptlab scrape "legal contracts"
+      promptlab scrape "python programming" --pages 20
+      promptlab scrape "medical diagnosis" --output benchmark
+      promptlab scrape "customer support" -u https://example.com/faq
+    
+    Scraped content is stored temporarily and automatically cleaned up after processing.
+    """
+    import asyncio
+    from promptlab.utils.scraper import WebScraper, ScraperConfig, scrape_for_domain, cleanup_temp_dir
+    from promptlab.utils.data_processor import DataProcessor, save_outputs
+    
+    cwd = Path.cwd()
+    temp_dir = cwd / "temp"
+    temp_dir.mkdir(exist_ok=True)
+    
+    console.print(Panel(
+        f"[bold]Domain:[/bold] {domain}\n"
+        f"[bold]Pages:[/bold] {num_pages}\n"
+        f"[bold]Output:[/bold] {output_type}",
+        title="🌐 Web Scraper",
+        border_style="blue",
+    ))
+    
+    async def run_scrape():
+        # Step 1: Scrape content
+        console.print("\n[bold cyan]Step 1: Scraping web content...[/bold cyan]")
+        
+        if urls:
+            scraper = WebScraper(ScraperConfig(max_pages=num_pages))
+            contents = await scraper.crawl(urls, max_pages=num_pages)
+        else:
+            contents = await scrape_for_domain(domain, num_pages=num_pages)
+        
+        if not contents:
+            console.print("[red]✗ No content scraped. Try different URLs or domain.[/red]")
+            return None
+        
+        console.print(f"[green]✓ Scraped {len(contents)} pages[/green]")
+        
+        # Step 2: Extract Q&A pairs (NO LLM needed!)
+        console.print("\n[bold cyan]Step 2: Extracting Q&A pairs...[/bold cyan]")
+        
+        processor = DataProcessor()  # No LLM required
+        results = await processor.process_content(contents, domain, output_type)
+        
+        # Step 3: Save outputs
+        console.print("\n[bold cyan]Step 3: Saving outputs...[/bold cyan]")
+        saved_files = save_outputs(results, temp_dir, domain)
+        
+        return results, saved_files
+    
+    try:
+        result = asyncio.run(run_scrape())
+        
+        if result:
+            results, saved_files = result
+            console.print()
+            console.print(Panel(
+                f"[bold green]Scraping complete![/bold green]\n\n"
+                f"Q&A pairs extracted: {len(results['qa_pairs'])}\n"
+                f"Persona generated: {'Yes' if results['persona'] else 'No'}\n"
+                f"Files created: {len(saved_files)}\n\n"
+                f"[cyan]Run: promptlab test[/cyan]",
+                title="✓ Success",
+                border_style="green",
+            ))
+    except Exception as e:
+        console.print(f"[red]Error during scraping: {e}[/red]")
+        raise typer.Exit(1)
+    finally:
+        # Clean up temporary files unless --keep-temp is specified
+        if not keep_temp:
+            from promptlab.utils.scraper import cleanup_temp_dir
+            cleanup_temp_dir()
+
+
 if __name__ == "__main__":
     app()
-
-
-

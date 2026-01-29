@@ -1,9 +1,4 @@
-"""Dynamic test generator - Uses LLM to generate role-specific test cases.
-
-This module provides functionality to dynamically generate test YAML files
-based on a given role/persona using an LLM. It supports multiple LLM providers
-and includes fallback generation when JSON parsing fails.
-"""
+"""Dynamic test generator - LLM-based test case generation for roles."""
 
 import json
 import re
@@ -14,7 +9,6 @@ from rich.console import Console
 
 console = Console()
 
-# Prompt template for the generator LLM
 GENERATOR_PROMPT = '''You are a test case generator for LLM evaluation.
 
 Given this role/persona: "{role}"

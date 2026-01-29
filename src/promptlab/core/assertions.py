@@ -20,6 +20,8 @@ def run_assertion(assertion: Assertion, response: str) -> AssertionResult:
     try:
         if assertion.type == AssertionType.CONTAINS:
             return _check_contains(assertion, response)
+        elif assertion.type == AssertionType.CONTAINS_NUMBER:
+            return _check_contains_number(assertion, response)
         elif assertion.type == AssertionType.EXACT_MATCH:
             return _check_exact_match(assertion, response)
         elif assertion.type == AssertionType.REGEX:
@@ -73,6 +75,63 @@ def _check_contains(assertion: Assertion, response: str) -> AssertionResult:
         expected=assertion.value,
         actual=response[:200] + "..." if len(response) > 200 else response,
         message=None if passed else f"Response does not contain '{assertion.value}'",
+    )
+
+
+def _normalize_number(s: str) -> str:
+    """Normalize a number string by removing formatting characters.
+    
+    Handles: commas (70,000 -> 70000), currency symbols ($70000 -> 70000),
+    trailing zeros after decimal (.00 -> ""), etc.
+    """
+    # Remove common currency symbols and whitespace
+    normalized = re.sub(r'[$€£¥₹\s]', '', s)
+    # Remove thousand separators (commas)
+    normalized = re.sub(r',', '', normalized)
+    # Remove trailing .00 or .0
+    normalized = re.sub(r'\.0+$', '', normalized)
+    return normalized
+
+
+def _extract_numbers(text: str) -> list[str]:
+    """Extract all numbers from text, normalizing each one.
+    
+    Matches integers and decimals, including those with commas and currency symbols.
+    """
+    # Match numbers that may have currency symbols, commas, and decimals
+    # This regex captures numbers like: 70000, 70,000, $70,000, 70000.00, $70,000.00
+    pattern = r'[$€£¥₹]?[\d,]+\.?\d*'
+    matches = re.findall(pattern, text)
+    # Normalize each match
+    return [_normalize_number(m) for m in matches if _normalize_number(m)]
+
+
+def _check_contains_number(assertion: Assertion, response: str) -> AssertionResult:
+    """Check if response contains the expected number, with format normalization.
+    
+    This handles cases where the LLM might format numbers differently:
+    - 70000 vs 70,000
+    - 70000 vs $70,000
+    - 45 vs 45.0
+    """
+    if assertion.value is None:
+        return AssertionResult(
+            type=assertion.type,
+            passed=False,
+            message="No value specified for contains_number assertion",
+        )
+    
+    expected_normalized = _normalize_number(assertion.value)
+    response_numbers = _extract_numbers(response)
+    
+    passed = expected_normalized in response_numbers
+    
+    return AssertionResult(
+        type=assertion.type,
+        passed=passed,
+        expected=assertion.value,
+        actual=f"Found numbers: {response_numbers[:10]}" if response_numbers else "No numbers found",
+        message=None if passed else f"Response does not contain number '{assertion.value}' (normalized: {expected_normalized})",
     )
 
 

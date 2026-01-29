@@ -8,6 +8,7 @@ from enum import Enum
 class AssertionType(str, Enum):
     """Types of assertions supported."""
     CONTAINS = "contains"
+    CONTAINS_NUMBER = "contains_number"  # Numeric comparison with format normalization
     EXACT_MATCH = "exact_match"
     REGEX = "regex"
     ONE_OF = "one_of"

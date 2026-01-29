@@ -1,0 +1,355 @@
+"""Data processor for extracting Q&A pairs from scraped content - NO LLM REQUIRED."""
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional, Literal
+
+import yaml
+from rich.console import Console
+
+from promptlab.utils.scraper import ScrapedContent
+
+console = Console()
+
+
+@dataclass
+class QAPair:
+    """A question-answer pair extracted from content."""
+    question: str
+    answer: str
+    source_url: str = ""
+    domain: str = ""
+    difficulty: str = "medium"
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RolePlayPersona:
+    """A role-play persona generated from domain content."""
+    name: str
+    description: str
+    system_prompt: str
+    example_dialogues: list[dict] = field(default_factory=list)
+    domain: str = ""
+    traits: list[str] = field(default_factory=list)
+
+
+class DataProcessor:
+    """Process scraped content using text extraction - NO LLM NEEDED."""
+    
+    def __init__(self, llm_runner=None, model: Optional[str] = None):
+        """Initialize the data processor. LLM runner is optional and not used."""
+        pass  # No LLM needed!
+    
+    def _is_valid_qa(self, question: str, answer: str) -> bool:
+        """Check if Q&A pair is valid and not noise."""
+        # Skip navigation/UI text
+        skip_patterns = [
+            r'^what is what\??',  # Broken patterns
+            r'^what is if\b',  # "What is If a variable..."
+            r'^what is it\b',  # "What is It is..."
+            r'^what is there\b',
+            r'^what is this\b',
+            r'^what is that\b',
+            r'^what is several\b',  # Weird patterns
+            r'(navigation|index|next|previous|theme|auto|light|dark|menu|home)',
+            r'^(click|press|select|choose|see|explain\s+\w+\s+in\s+the\s+context)',
+            r'^\d+$',  # Just numbers
+            r'^[\W\s]+$',  # Just symbols
+            r'^(documentation|general)',  # Common noise
+            r'\n',  # Contains newlines (likely noisy)
+            r'advertising',  # Ads
+        ]
+        q_lower = question.lower().strip()
+        a_lower = answer.lower().strip()
+        for pattern in skip_patterns:
+            if re.search(pattern, q_lower, re.I) or re.search(pattern, a_lower, re.I):
+                return False
+        # Question should be a proper question ending with ?
+        if not question.strip().endswith('?'):
+            return False
+        # Question should not have newlines or weird chars
+        if '\n' in question or '|' in question:
+            return False
+        return len(question) > 15 and len(answer) > 10 and len(answer) < 250
+    
+    def _extract_sentences(self, text: str, max_sentences: int = 50) -> list[str]:
+        """Extract clean sentences from text."""
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        clean = []
+        for s in sentences:
+            s = s.strip()
+            # Skip short, navigation-like, or symbol-only lines
+            if len(s) > 30 and len(s) < 500 and not re.match(r'^[\|\-\>\<\»\«\s]+', s):
+                clean.append(s)
+        return clean[:max_sentences]
+    
+    def _extract_key_terms(self, text: str) -> list[str]:
+        """Extract key terms (capitalized words, technical terms)."""
+        # Skip common non-informative words
+        skip_words = {'Navigation', 'Index', 'Next', 'Previous', 'Home', 'Menu', 'Search', 'Click', 'See', 'Also'}
+        caps = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+        caps = [c for c in caps if c not in skip_words and len(c) > 3]
+        tech = re.findall(r'\b[a-z]+_[a-z]+\b|\b[a-z]+[A-Z][a-z]+\b', text)
+        terms = list(set(caps + tech))
+        return terms[:20]
+    
+    def _clean_text(self, text: str) -> str:
+        """Remove navigation artifacts from text."""
+        # Remove common nav patterns
+        text = re.sub(r'—[^—]+documentation', '', text, flags=re.I)
+        text = re.sub(r'\d+\.\d+(\.\d+)?\s+Documentation', '', text)
+        text = re.sub(r'Navigation\s+index\s+modules', '', text, flags=re.I)
+        text = re.sub(r'\|\s*(next|previous|home|index)\s*\|', '', text, flags=re.I)
+        text = re.sub(r'Theme\s+(Auto|Light|Dark)', '', text, flags=re.I)
+        return text.strip()
+    
+    def _find_qa_patterns(self, text: str) -> list[tuple[str, str]]:
+        """Find Q&A patterns in text (FAQ sections, Q: A: format, etc.)."""
+        text = self._clean_text(text)
+        qa_pairs = []
+        
+        # Pattern 1: Q: ... A: ... format
+        qa_matches = re.findall(
+            r'(?:Q|Question)[:\s]+(.+?)(?:A|Answer)[:\s]+(.+?)(?=(?:Q|Question)[:\s]|$)',
+            text, re.IGNORECASE | re.DOTALL
+        )
+        for q, a in qa_matches:
+            q, a = q.strip()[:200], a.strip()[:500]
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        # Pattern 2: "What is X?" followed by definition
+        what_matches = re.findall(
+            r'(What (?:is|are|does|do) [^?]+\?)\s*([^.!?]+[.!?])',
+            text, re.IGNORECASE
+        )
+        for q, a in what_matches:
+            q, a = q.strip(), a.strip()
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        # Pattern 3: "How to X?" followed by explanation
+        how_matches = re.findall(
+            r'(How (?:to|do|does|can) [^?]+\?)\s*([^.!?]+[.!?](?:[^.!?]+[.!?])?)',
+            text, re.IGNORECASE
+        )
+        for q, a in how_matches:
+            q, a = q.strip(), a.strip()
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        return qa_pairs[:10]
+    
+    def _generate_questions_from_content(self, text: str, domain: str) -> list[QAPair]:
+        """Generate Q&A pairs from content using text analysis."""
+        qa_pairs = []
+        seen_questions = set()
+        
+        # 1. Try to find existing Q&A patterns (already validated in _find_qa_patterns)
+        found_qa = self._find_qa_patterns(text)
+        for q, a in found_qa:
+            q_norm = q.lower().strip()
+            if q_norm in seen_questions:
+                continue
+            
+            # Validate again with the full answer
+            if not self._is_valid_qa(q, a):
+                continue
+                
+            seen_questions.add(q_norm)
+            
+            # Clean and truncate the answer to first 2 sentences
+            sentences = re.split(r'(?<=[.!?])\s+', a)
+            clean_answer = ' '.join(sentences[:2]).strip()
+            if len(clean_answer) > 200:
+                clean_answer = clean_answer[:200] + '...'
+            
+            qa_pairs.append(QAPair(
+                question=q,
+                answer=clean_answer,
+                domain=domain,
+                difficulty="medium",
+                tags=[domain.lower()]
+            ))
+        
+        # 2. Generate questions from key sentences (definitions)
+        sentences = self._extract_sentences(text)
+        
+        # Find "X is Y" definition patterns
+        for sentence in sentences[:30]:
+            # Match patterns like "Python is a programming language"
+            match = re.match(r'^((?:The\s+)?[A-Z][A-Za-z0-9\s]+?) (?:is|are) (?:a |an |the )?(.+)', sentence)
+            if match:
+                subject, definition = match.groups()
+                subject = subject.strip()
+                definition = definition.strip()
+                
+                # Skip if subject is too short/long or generic
+                if len(subject) < 4 or len(subject) > 50 or len(definition) < 20:
+                    continue
+                    
+                # Skip navigation-like or generic subjects
+                skip_subjects = {'this', 'it', 'there', 'here', 'that', 'these', 'those', 
+                                'the page', 'the section', 'the following', 'this page',
+                                'if', 'if a', 'several', 'what', 'it is'}
+                if subject.lower() in skip_subjects:
+                    continue
+                
+                question = f"What is {subject}?"
+                
+                # Use the full definition as answer (truncated if too long)
+                answer = definition if len(definition) <= 150 else definition[:150] + '...'
+                
+                # Validate the generated Q&A
+                if not self._is_valid_qa(question, answer):
+                    continue
+                
+                if question.lower() in seen_questions:
+                    continue
+                seen_questions.add(question.lower())
+                
+                qa_pairs.append(QAPair(
+                    question=question,
+                    answer=answer,
+                    domain=domain,
+                    difficulty="easy",
+                    tags=[domain.lower(), "definition"]
+                ))
+        
+        return qa_pairs[:15]
+    
+    async def extract_qa_pairs(self, content: ScrapedContent, domain: str) -> list[QAPair]:
+        """Extract Q&A pairs from scraped content - NO LLM NEEDED."""
+        qa_pairs = self._generate_questions_from_content(content.text, domain)
+        for qa in qa_pairs:
+            qa.source_url = content.url
+        return qa_pairs
+    
+    async def generate_persona(self, contents: list[ScrapedContent], domain: str) -> Optional[RolePlayPersona]:
+        """Generate a basic persona from domain content - NO LLM NEEDED."""
+        return RolePlayPersona(
+            name=f"{domain.title()} Expert",
+            description=f"An AI assistant specialized in {domain}",
+            system_prompt=f"You are a helpful {domain} expert. Answer questions accurately and concisely.",
+            example_dialogues=[
+                {"user": f"Tell me about {domain}", "assistant": f"I'd be happy to help you learn about {domain}. What would you like to know?"},
+            ],
+            domain=domain,
+            traits=["knowledgeable", "helpful", "precise"]
+        )
+    
+    async def process_content(
+        self,
+        contents: list[ScrapedContent],
+        domain: str,
+        output_type: Literal["benchmark", "roleplay", "finetune", "all"] = "all"
+    ) -> dict:
+        """Process scraped content - NO LLM NEEDED."""
+        results = {
+            "domain": domain,
+            "sources": len(contents),
+            "qa_pairs": [],
+            "persona": None,
+            "finetune_data": [],
+        }
+        
+        if output_type in ("benchmark", "finetune", "all"):
+            console.print(f"[cyan]Extracting Q&A pairs from {len(contents)} sources...[/cyan]")
+            for content in contents:
+                pairs = await self.extract_qa_pairs(content, domain)
+                results["qa_pairs"].extend(pairs)
+                if pairs:
+                    console.print(f"  [green]✓[/green] {len(pairs)} pairs from {content.title[:50]}")
+        
+        if output_type in ("roleplay", "all"):
+            console.print(f"[cyan]Generating persona for {domain}...[/cyan]")
+            persona = await self.generate_persona(contents, domain)
+            if persona:
+                results["persona"] = persona
+                console.print(f"  [green]✓[/green] Created persona: {persona.name}")
+        
+        if output_type in ("finetune", "all"):
+            for qa in results["qa_pairs"]:
+                results["finetune_data"].append({
+                    "messages": [
+                        {"role": "user", "content": qa.question},
+                        {"role": "assistant", "content": qa.answer},
+                    ]
+                })
+        
+        return results
+
+
+def generate_test_cases_yaml(qa_pairs: list[QAPair], domain: str) -> dict:
+    """Generate PromptLab test cases YAML from Q&A pairs."""
+    cases = []
+    for i, qa in enumerate(qa_pairs, 1):
+        cases.append({
+            "id": f"{domain.lower().replace(' ', '-')}-{i}",
+            "prompt": qa.question,
+            "assertions": [{"type": "contains", "value": qa.answer.strip(), "case_sensitive": False}],
+            "tags": qa.tags or [domain.lower()],
+        })
+    return {
+        "metadata": {"name": f"{domain.title()} - Knowledge Test"},
+        "defaults": {"temperature": 0},
+        "cases": cases,
+    }
+
+
+def generate_persona_yaml(persona: RolePlayPersona) -> dict:
+    """Generate role-play test cases YAML from persona."""
+    cases = []
+    for i, dialogue in enumerate(persona.example_dialogues, 1):
+        cases.append({
+            "id": f"{persona.domain.lower().replace(' ', '-')}-roleplay-{i}",
+            "system_prompt": persona.system_prompt,
+            "prompt": dialogue.get("user", ""),
+            "assertions": [{"type": "min_length", "value": 50}],
+            "tags": ["roleplay", persona.domain.lower()],
+        })
+    return {
+        "metadata": {
+            "name": f"{persona.name} - Role-play Tests",
+            "persona": {"name": persona.name, "description": persona.description, "traits": persona.traits}
+        },
+        "defaults": {"temperature": 0.7, "system_prompt": persona.system_prompt},
+        "cases": cases,
+    }
+
+
+def save_outputs(results: dict, output_dir: Path, domain: str) -> dict[str, Path]:
+    """Save processed results to files."""
+    import json
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_files = {}
+    domain_slug = domain.lower().replace(" ", "_")
+    
+    if results["qa_pairs"]:
+        test_yaml = generate_test_cases_yaml(results["qa_pairs"], domain)
+        test_path = output_dir / f"{domain_slug}_benchmark.yaml"
+        with open(test_path, "w", encoding="utf-8") as f:
+            yaml.dump(test_yaml, f, default_flow_style=False, allow_unicode=True)
+        saved_files["benchmark"] = test_path
+        console.print(f"[green]✓[/green] Saved benchmark: {test_path}")
+    
+    if results["persona"]:
+        persona_yaml = generate_persona_yaml(results["persona"])
+        persona_path = output_dir / f"{domain_slug}_roleplay.yaml"
+        with open(persona_path, "w", encoding="utf-8") as f:
+            yaml.dump(persona_yaml, f, default_flow_style=False, allow_unicode=True)
+        saved_files["roleplay"] = persona_path
+        console.print(f"[green]✓[/green] Saved roleplay: {persona_path}")
+    
+    if results["finetune_data"]:
+        finetune_path = output_dir / f"{domain_slug}_finetune.jsonl"
+        with open(finetune_path, "w", encoding="utf-8") as f:
+            for entry in results["finetune_data"]:
+                f.write(json.dumps(entry) + "\n")
+        saved_files["finetune"] = finetune_path
+        console.print(f"[green]✓[/green] Saved {len(results['finetune_data'])} finetune examples")
+    
+    return saved_files
