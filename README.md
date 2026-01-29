@@ -73,6 +73,7 @@ You're building an LLM-powered app. You have prompts in production. You make cha
 | Feature | Description |
 |---------|-------------|
 | **Dynamic Test Generation** | `--role "You are X"` → Auto-generates relevant tests |
+| **Web Scraping** | Dynamic benchmark generation from any topic with production-grade stack |
 | **LLM Council** | Multiple models evaluate responses, reach consensus |
 | **HuggingFace Benchmarks** | Import MMLU, GSM8K, TruthfulQA with one command |
 | **Parallel Execution** | Run tests concurrently for speed |
@@ -125,6 +126,15 @@ council:
 testing:
   parallelism: 4
   timeout_ms: 30000
+
+scraper:
+  # Brave Search API (OPTIONAL - requires credit card even for free tier)
+  brave_api_key: ""  # Leave empty to use free alternatives
+  
+  # Free search providers (no auth required)
+  fallback_search: searxng  # searxng | duckduckgo | google_scrape
+  max_pages: 5
+  timeout: 30
 ```
 
 ---
@@ -198,6 +208,7 @@ generator: openrouter/google/gemma-2-9b-it:free
 | `promptlab run roleplay --role "..."` | Generate + run tests for role |
 | `promptlab run performance` | Run HuggingFace benchmarks |
 | `promptlab benchmark gsm8k` | Download GSM8K benchmark |
+| `promptlab scrape "topic" --pages N` | Scrape web to generate benchmarks dynamically |
 
 ---
 
@@ -208,6 +219,94 @@ generator: openrouter/google/gemma-2-9b-it:free
 | `full` | All 3 | Slow | Critical tests |
 | `fast` | 2 (skip critique) | Medium | Regular testing |
 | `vote` | Just majority | Fast | Quick sanity checks |
+
+---
+
+## 🌐 Web Scraping (Dynamic Benchmark Generation)
+
+Generate custom benchmarks from **any topic** by scraping the web - no static datasets required!
+
+### Quick Example:
+
+```bash
+# Scrape 5 pages about quantum computing
+promplab scrape "quantum computing" --pages 5 --output benchmark
+
+# Run the generated tests
+promplab test tests/benchmark.yaml
+```
+
+### Tech Stack (Production-Grade):
+
+| Component | Technology | Purpose |
+|-----------|------------|----------|
+| **HTTP Client** | `httpx` (async, HTTP/2) | Fast request-based scraping |
+| **Browser** | `Playwright` + stealth | JS-rendered pages, bot protection bypass |
+| **HTML Parser** | `selectolax` | 5-10x faster than BeautifulSoup |
+| **Search** | SearXNG (free) | Dynamic URL discovery, no auth needed |
+
+### Hybrid Approach:
+
+```
+1. Try httpx (fast, lightweight)
+   ↓
+2. Detect if page needs JavaScript
+   ↓
+3. Fallback to Playwright (stealth mode)
+   ↓
+4. Extract Q&A pairs automatically
+   ↓
+5. Generate YAML test suite
+```
+
+### Search Providers:
+
+| Provider | Auth Required | Rate Limits | Quality |
+|----------|---------------|-------------|----------|
+| **SearXNG** (default) | ❌ No | ✅ None | ⭐⭐⭐⭐ |
+| **Brave Search API** | ⚠️ Credit card | 2,000/month | ⭐⭐⭐⭐⭐ |
+| **DuckDuckGo** | ❌ No | ⚠️ Sometimes | ⭐⭐⭐ |
+| **Google Scrape** | ❌ No | ⚠️ Often blocked | ⭐⭐ |
+
+**Recommendation:** Leave `brave_api_key` empty - SearXNG works perfectly without any setup!
+
+### Usage:
+
+```bash
+# Basic scraping
+promplab scrape "machine learning"
+
+# Specify page count
+promplab scrape "python decorators" --pages 3
+
+# Custom output file
+promplab scrape "quantum entanglement" --output quantum_tests
+
+# Auto-run tests after scraping
+promplab scrape "redis caching" --run
+```
+
+### Generated Output:
+
+```yaml
+# tests/benchmark.yaml
+metadata:
+  name: "Web-Scraped Test Suite: quantum computing"
+  description: "Auto-generated from 5 web sources"
+  
+cases:
+  - id: qa-1
+    prompt: "What is quantum superposition?"
+    assertions:
+      - type: llm_judge
+        criteria: "Explains quantum states existing in multiple configurations"
+        
+  - id: qa-2
+    prompt: "How does quantum entanglement work?"
+    assertions:
+      - type: council_judge
+        criteria: "Describes particle correlation across distance"
+```
 
 ---
 

@@ -1,0 +1,55 @@
+cases:
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: Hyperledger Fabric is an open-source, modular blockchain framework for
+      developing enterprise-grade applications with industry strategies.
+  id: blockchain-1
+  prompt: What is Hyperledger Fabric?
+  tags:
+  - blockchain
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: shared, immutable digital ledger, enabling the recording of transactions
+      and the tracking of assets within a business network and providing a single
+      s...
+  id: blockchain-2
+  prompt: What is Blockchain?
+  tags:
+  - blockchain
+  - definition
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: validated through a consensus mechanism, ensuring agreement across the
+      network.
+  id: blockchain-3
+  prompt: What is Transactions?
+  tags:
+  - blockchain
+  - definition
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: shared only with authorized network members, fostering trust and creating
+      end-to-end visibility across the system.
+  id: blockchain-4
+  prompt: What is Confidential records?
+  tags:
+  - blockchain
+  - definition
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: ready-to-use framework designed for high-volume and high-speed supply chains,
+      resulting from a strategic partnership between IBM and AWS.
+  id: blockchain-5
+  prompt: What is The IBM Consulting Supply Chain Ensemble on AWS?
+  tags:
+  - blockchain
+  - definition
+defaults:
+  temperature: 0
+metadata:
+  name: Blockchain - Knowledge Test

@@ -1,0 +1,31 @@
+cases:
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: In short, it is used in decorator syntax and for matrix multiplication.
+  id: python-programming-1
+  prompt: What does the “at” (@) symbol do in Python?
+  tags:
+  - python programming
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: not at all clear what's going on.
+  id: python-programming-2
+  prompt: What is From your explanation of Flask it?
+  tags:
+  - python programming
+  - definition
+- assertions:
+  - case_sensitive: false
+    type: contains
+    value: most you can compare.
+  id: python-programming-3
+  prompt: What is I thought that objects?
+  tags:
+  - python programming
+  - definition
+defaults:
+  temperature: 0
+metadata:
+  name: Python Programming - Knowledge Test
