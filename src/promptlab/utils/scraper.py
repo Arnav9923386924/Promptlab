@@ -4,7 +4,10 @@ Tech stack:
 - httpx (async) for fast HTTP requests
 - Playwright (async) with stealth for JS-rendered/bot-protected pages
 - selectolax + lxml for fast HTML parsing
-- Brave Search API for dynamic URL discovery
+- SerpAPI (Google results, 100 free/month, no CC required)
+- Brave Search API (requires credit card even for free tier)
+- SearXNG (completely free, no auth needed)
+- DuckDuckGo/Google scrape as fallbacks
 """
 
 import asyncio
@@ -127,7 +130,10 @@ class ScraperConfig:
         r"\.pdf$", r"\.jpg$", r"\.png$", r"\.gif$", r"\.css$", r"\.js$",
         r"login", r"signup", r"register", r"logout", r"cart", r"checkout"
     ])
-    # Brave Search API key (optional - falls back to other methods)
+    # SerpAPI key (RECOMMENDED - 100 free searches/month, no credit card required)
+    # Get free key at: https://serpapi.com/
+    serpapi_key: Optional[str] = None
+    # Brave Search API key (optional - requires credit card even for free tier)
     brave_api_key: Optional[str] = None
     # Use browser for all requests (slower but more reliable)
     force_browser: bool = False
@@ -492,8 +498,89 @@ class WebScraper:
         await self.close()
         return self._scraped_content
     
+    async def search_serpapi(self, query: str, num_results: int = 10) -> list[str]:
+        """Search using SerpAPI (Google results, 100 free/month, no CC required).
+        
+        Get your free API key at: https://serpapi.com/
+        """
+        api_key = self.config.serpapi_key
+        if not api_key:
+            # Try environment variable
+            import os
+            api_key = os.environ.get("SERPAPI_KEY") or os.environ.get("SERPAPI_API_KEY")
+        
+        if not api_key:
+            return []
+        
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                "https://serpapi.com/search",
+                params={
+                    "q": query,
+                    "api_key": api_key,
+                    "num": num_results,
+                    "engine": "google",
+                }
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            urls = []
+            for result in data.get("organic_results", []):
+                url = result.get("link")
+                if url and self._is_valid_url(url):
+                    urls.append(url)
+            
+            return urls[:num_results]
+            
+        except Exception as e:
+            console.print(f"[yellow]SerpAPI search error: {e}[/yellow]")
+            return []
+    
+    async def search_searxng(self, query: str, num_results: int = 10) -> list[str]:
+        """Search using SearXNG public instances (completely free, no auth)."""
+        searxng_instances = [
+            "https://searx.be",
+            "https://search.sapti.me",
+            "https://searx.tiekoetter.com",
+            "https://searx.ninja",
+        ]
+        
+        client = await self._get_client()
+        
+        for instance in searxng_instances:
+            try:
+                response = await client.get(
+                    f"{instance}/search",
+                    params={
+                        "q": query,
+                        "format": "json",
+                        "categories": "general",
+                        "language": "en",
+                    },
+                    headers={"User-Agent": "PromptLab/1.0"},
+                    timeout=15.0,
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    urls = []
+                    for result in data.get("results", []):
+                        url = result.get("url")
+                        if url and self._is_valid_url(url):
+                            urls.append(url)
+                    
+                    if urls:
+                        return urls[:num_results]
+            
+            except Exception:
+                continue  # Try next instance
+        
+        return []
+    
     async def search_brave(self, query: str, num_results: int = 10) -> list[str]:
-        """Search using Brave Search API (requires API key)."""
+        """Search using Brave Search API (requires credit card for signup)."""
         api_key = self.config.brave_api_key
         if not api_key:
             # Try environment variable
@@ -598,14 +685,28 @@ class WebScraper:
         """Search for URLs using available search providers.
         
         Priority:
-        1. Brave Search API (best quality, requires API key)
-        2. DuckDuckGo library
-        3. Google scrape via browser (fallback)
+        1. SerpAPI (Google results, 100 free/month, no CC required) ⭐
+        2. Brave Search API (good quality, requires CC for signup)
+        3. SearXNG (free, no auth, good quality)
+        4. DuckDuckGo library (sometimes rate limited)
+        5. Google scrape via browser (last resort, often blocked)
         """
-        # Try Brave first (best quality)
+        # Try SerpAPI first (best quality, free tier without CC)
+        urls = await self.search_serpapi(query, num_results)
+        if urls:
+            console.print(f"[cyan]Found {len(urls)} results via SerpAPI (Google)[/cyan]")
+            return urls
+        
+        # Try Brave Search (requires CC for signup)
         urls = await self.search_brave(query, num_results)
         if urls:
             console.print(f"[cyan]Found {len(urls)} results via Brave Search[/cyan]")
+            return urls
+        
+        # Try SearXNG (completely free, no auth)
+        urls = await self.search_searxng(query, num_results)
+        if urls:
+            console.print(f"[cyan]Found {len(urls)} results via SearXNG[/cyan]")
             return urls
         
         # Fallback to DuckDuckGo

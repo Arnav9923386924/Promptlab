@@ -263,12 +263,13 @@ promplab test tests/benchmark.yaml
 
 | Provider | Auth Required | Rate Limits | Quality |
 |----------|---------------|-------------|----------|
-| **SearXNG** (default) | ❌ No | ✅ None | ⭐⭐⭐⭐ |
-| **Brave Search API** | ⚠️ Credit card | 2,000/month | ⭐⭐⭐⭐⭐ |
+| **SerpAPI** (recommended) | ✅ Free API key | 100/month free | ⭐⭐⭐⭐⭐ |
+| **SearXNG** (default fallback) | ❌ No | ✅ None | ⭐⭐⭐⭐ |
+| **Brave Search API** | ⚠️ Credit card | 2,000/month | ⭐⭐⭐⭐ |
 | **DuckDuckGo** | ❌ No | ⚠️ Sometimes | ⭐⭐⭐ |
 | **Google Scrape** | ❌ No | ⚠️ Often blocked | ⭐⭐ |
 
-**Recommendation:** Leave `brave_api_key` empty - SearXNG works perfectly without any setup!
+**Recommendation:** Get a free SerpAPI key at https://serpapi.com/ (no credit card required!) for best Google results. Or leave it empty to use SearXNG.
 
 ### Usage:
 
