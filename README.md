@@ -209,6 +209,99 @@ generator: openrouter/google/gemma-2-9b-it:free
 | `promptlab run performance` | Run HuggingFace benchmarks |
 | `promptlab benchmark gsm8k` | Download GSM8K benchmark |
 | `promptlab scrape "topic" --pages N` | Scrape web to generate benchmarks dynamically |
+| `promptlab validate` | Validate BSP and compare with baseline |
+| `promptlab validate --push` | Validate and push to git if improved |
+| `promptlab validate --ci` | CI mode for GitHub Actions |
+
+---
+
+## 🔍 BSP Validation (Behavior Specification Prompt)
+
+Validate your LLM's behavior specification prompt with council-based evaluation.
+
+### What is BSP Validation?
+
+Your **Behavior Specification Prompt (BSP)** is the system prompt that defines how your LLM should behave. BSP validation:
+
+1. **Prepends your BSP** to all test prompts
+2. **Collects all outputs** into a single file
+3. **Submits to LLM Council** for batch evaluation
+4. **Compares scores** with baseline
+5. **Auto-pushes to git** if score improves (optional)
+
+### Configuration:
+
+```yaml
+# promptlab.yaml
+bsp:
+  prompt: |
+    You are a helpful assistant.
+    Always be accurate and concise.
+    If unsure, say so.
+  min_score: 0.7
+  version: "1.0.0"
+
+baseline:
+  auto_update: true
+  min_improvement: 0.01
+
+git:
+  enabled: true
+  commit_template: "chore: BSP validation (score: {score:.2f})"
+  auto_push: false
+```
+
+### Usage:
+
+```bash
+# Basic validation
+promptlab validate
+
+# Validate and push to git if improved
+promptlab validate --push
+
+# CI mode (exit code based on result)
+promptlab validate --ci
+
+# Save JSON output
+promptlab validate --output result.json
+```
+
+### CI/CD Integration (GitHub Actions):
+
+```yaml
+# .github/workflows/prompt-tests.yml
+jobs:
+  bsp-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - run: pip install promptlab
+      - run: promptlab validate --ci
+```
+
+### How It Works:
+
+```
+1. Load BSP from promptlab.yaml
+   ↓
+2. Run all tests with BSP prepended
+   ↓
+3. Collect outputs to .promptlab/runs/
+   ↓
+4. Submit batch to LLM Council
+   ↓
+5. Council evaluates:
+   - Role Adherence (0-1)
+   - Response Quality (0-1)
+   - Consistency (0-1)
+   - Appropriateness (0-1)
+   ↓
+6. Compare with baseline
+   ↓
+7. If improved → Update baseline → Push to git
+```
 
 ---
 

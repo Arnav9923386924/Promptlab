@@ -14,8 +14,8 @@ from promptlab.core.models import (
 )
 from promptlab.core.parser import parse_test_file, discover_test_files
 from promptlab.core.assertions import run_all_assertions
-from promptlab.mcp_servers.llm_runner.runner import LLMRunner
-from promptlab.mcp_servers.council.council import Council
+from promptlab.llm_council.llm_runner.runner import LLMRunner
+from promptlab.llm_council.council.council import Council
 from promptlab.utils.config import PromptLabConfig
 
 

@@ -288,10 +288,10 @@ name: Prompt Tests
 
 on:
   pull_request:
-    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+    paths: ['prompts/**', 'tests/**', 'promptlab.yaml', 'bsp/**']
   push:
     branches: [main]
-    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+    paths: ['prompts/**', 'tests/**', 'promptlab.yaml', 'bsp/**']
 
 jobs:
   prompt-tests:
@@ -315,6 +315,51 @@ jobs:
       
       - name: Run Tests
         run: promptlab test --ci
+      
+  bsp-validation:
+    runs-on: ubuntu-latest
+    needs: prompt-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install PromptLab
+        run: pip install promptlab
+      
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 5
+          ollama pull llama3.1:8b
+          ollama pull mistral:7b
+      
+      - name: Run BSP Validation
+        run: |
+          promptlab validate --ci --output validation-result.json
+      
+      - name: Upload Validation Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-results
+          path: |
+            validation-result.json
+            .promptlab/runs/
+      
+      - name: Auto-Push on Improvement (optional)
+        if: success()
+        run: |
+          # Uncomment to enable auto-push when score improves
+          # git config user.name github-actions
+          # git config user.email github-actions@github.com
+          # promptlab validate --push --ci
+          echo "BSP Validation passed! Enable auto-push in workflow to automatically update baselines."
 '''
 
 
@@ -471,7 +516,7 @@ def run_quick(
     import asyncio
     from promptlab.utils.config import load_config
     from promptlab.core.runner import TestRunner, print_results
-    from promptlab.mcp_servers.llm_runner.runner import LLMRunner
+    from promptlab.llm_council.llm_runner.runner import LLMRunner
     
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
@@ -617,12 +662,160 @@ def run_quick(
         raise typer.Exit(1)
 
 
+@app.command("validate")
+def validate_bsp(
+    test_dir: str = typer.Option("temp", "--dir", "-d", help="Directory containing test files"),
+    files: list[str] = typer.Option(None, "--file", "-f", help="Specific test files to run"),
+    save_baseline: bool = typer.Option(True, "--save-baseline/--no-save-baseline", help="Save as new baseline if improved"),
+    auto_push: bool = typer.Option(False, "--push", "-p", help="Auto-push to git if score improves"),
+    ci: bool = typer.Option(False, "--ci", help="CI mode - exit with code based on validation result"),
+    output_json: str = typer.Option(None, "--output", "-o", help="Save validation result to JSON file"),
+):
+    """Validate your Behavior Specification Prompt (BSP) against test cases.
+    
+    This command runs the complete BSP validation workflow:
+    1. Load BSP from config (promptlab.yaml)
+    2. Run all test cases with BSP prepended
+    3. Collect outputs for council review
+    4. Submit to LLM Council for batch evaluation
+    5. Compare score with baseline
+    6. Optionally push to git if improved
+    
+    Examples:
+      promptlab validate                        # Run validation with defaults
+      promptlab validate --push                 # Push to git if improved
+      promptlab validate --ci                   # CI mode for GitHub Actions
+      promptlab validate -f temp/my_test.yaml   # Validate specific file
+    """
+    import asyncio
+    import json as json_module
+    from promptlab.utils.config import load_config, load_bsp
+    from promptlab.core.bsp_validator import BSPValidator
+    from promptlab.core.baseline import BaselineManager
+    from promptlab.utils.git_integration import GitIntegration
+    
+    cwd = Path.cwd()
+    config_path = cwd / "promptlab.yaml"
+    test_path = cwd / test_dir
+    
+    # Check if initialized
+    if not config_path.exists():
+        console.print("[red]✗ Not a PromptLab project. Run 'promptlab init' first.[/red]")
+        raise typer.Exit(1)
+    
+    # Load config
+    config = load_config(config_path)
+    
+    # Check if BSP is configured
+    bsp = load_bsp(config, cwd)
+    if not bsp:
+        console.print("[yellow]⚠️  No BSP configured. Add 'bsp' section to promptlab.yaml[/yellow]")
+        console.print("[dim]Example:[/dim]")
+        console.print("[dim]  bsp:[/dim]")
+        console.print("[dim]    prompt: 'You are a helpful assistant...'[/dim]")
+        console.print("[dim]    min_score: 0.7[/dim]")
+        raise typer.Exit(1)
+    
+    console.print(Panel(
+        f"[bold]BSP Version:[/bold] {config.bsp.version if config.bsp else 'default'}\n"
+        f"[bold]Model:[/bold] {config.models.default}\n"
+        f"[bold]Council:[/bold] {'enabled' if config.council.enabled else 'disabled'}\n"
+        f"[bold]Test Dir:[/bold] {test_path}\n"
+        f"[bold]Auto Push:[/bold] {'yes' if auto_push else 'no'}",
+        title="🔍 BSP Validation",
+        border_style="blue",
+    ))
+    
+    async def run_validation():
+        # Create validator
+        validator = BSPValidator(config, cwd)
+        
+        # Run validation
+        result = await validator.validate(
+            test_dir=test_path,
+            test_files=list(files) if files else None,
+        )
+        
+        return result
+    
+    try:
+        result = asyncio.run(run_validation())
+        
+        # Save baseline if improved
+        if save_baseline and result.should_push:
+            baseline_manager = BaselineManager(cwd / ".promptlab")
+            baseline_manager.save_bsp_baseline(
+                run_id=result.run_id,
+                score=result.council_score,
+                bsp_hash=result.bsp_hash,
+                bsp_version=result.bsp_version,
+                model=result.model,
+                total_tests=result.total_tests,
+                passed=result.passed,
+                confidence=result.council_result.confidence if result.council_result else "medium",
+                tag=f"bsp_{result.bsp_version}_{result.bsp_hash[:8]}",
+            )
+            console.print("[green]✓ Saved new baseline[/green]")
+        
+        # Auto-push to git if enabled
+        if auto_push and result.should_push:
+            git = GitIntegration(cwd)
+            commit_template = config.git.commit_template if config.git else "chore: BSP validation passed (score: {score:.2f})"
+            git.commit_and_push(
+                score=result.council_score,
+                previous_score=result.baseline_score,
+                commit_template=commit_template,
+                branch=config.git.branch if config.git else None,
+                auto_push=config.git.auto_push if config.git else True,
+            )
+        elif auto_push and not result.should_push:
+            console.print("[yellow]Not pushing - score did not improve sufficiently[/yellow]")
+        
+        # Save JSON output if requested
+        if output_json:
+            output_path = Path(output_json)
+            with open(output_path, "w", encoding="utf-8") as f:
+                json_module.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+            console.print(f"[green]✓ Saved result to {output_path}[/green]")
+        
+        # Final summary
+        console.print()
+        if result.passed:
+            console.print(Panel(
+                f"[bold green]✓ Validation PASSED[/bold green]\n\n"
+                f"Score: {result.council_score:.2f}\n"
+                f"{'Improvement: ' + f'+{result.improvement:.2f}' if result.improvement and result.improvement > 0 else ''}\n"
+                f"Outputs: {result.outputs_file}",
+                title="🎉 Success",
+                border_style="green",
+            ))
+        else:
+            console.print(Panel(
+                f"[bold red]✗ Validation FAILED[/bold red]\n\n"
+                f"Score: {result.council_score:.2f}\n"
+                f"Min Required: {config.bsp.min_score if config.bsp else 0.7}\n"
+                f"Outputs: {result.outputs_file}",
+                title="❌ Failed",
+                border_style="red",
+            ))
+        
+        # Exit code for CI
+        if ci:
+            raise typer.Exit(0 if result.passed else 1)
+            
+    except Exception as e:
+        console.print(f"[red]Error during validation: {e}[/red]")
+        if ci:
+            raise typer.Exit(2)
+        raise typer.Exit(1)
+
+
 @app.command("scrape")
 def scrape_data(
     domain: str = typer.Argument(..., help="Domain/topic to scrape (e.g., 'legal contracts', 'medical diagnosis')"),
     urls: list[str] = typer.Option(None, "--url", "-u", help="Specific URLs to scrape (can be used multiple times)"),
     num_pages: int = typer.Option(10, "--pages", "-p", help="Number of pages to scrape"),
-    output_type: str = typer.Option("all", "--output", "-o", help="Output type: benchmark, roleplay, finetune, all"),
+    output_type: str = typer.Option("all", "--output", "-o", help="Output type: benchmark, roleplay, finetune, all, masked"),
     keep_temp: bool = typer.Option(False, "--keep-temp", help="Keep temporary scraped files (for debugging)"),
 ):
     """Scrape web content and generate test cases for a domain.

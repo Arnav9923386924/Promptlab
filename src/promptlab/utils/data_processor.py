@@ -1,6 +1,7 @@
-"""Data processor for extracting Q&A pairs from scraped content - NO LLM REQUIRED."""
+"""Data processor for extracting Q&A pairs and masked tests from scraped content - NO LLM REQUIRED."""
 
 import re
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Literal
@@ -18,6 +19,19 @@ class QAPair:
     """A question-answer pair extracted from content."""
     question: str
     answer: str
+    source_url: str = ""
+    domain: str = ""
+    difficulty: str = "medium"
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MaskedTest:
+    """A fill-in-the-blank (cloze) test extracted from content."""
+    masked_text: str
+    answer: str
+    original_text: str
+    mask_position: int
     source_url: str = ""
     domain: str = ""
     difficulty: str = "medium"
@@ -240,17 +254,101 @@ class DataProcessor:
             traits=["knowledgeable", "helpful", "precise"]
         )
     
+    def _generate_masked_tests(self, text: str, domain: str) -> list[MaskedTest]:
+        """Generate fill-in-the-blank (cloze) tests from text."""
+        masked_tests = []
+        sentences = self._extract_sentences(text)
+        
+        # Common technical/domain terms we want to mask
+        important_pos_patterns = [
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',  # Proper nouns
+            r'\b([a-z]+_[a-z]+)\b',  # snake_case terms
+            r'\b([a-z]+[A-Z][a-z]+)\b',  # camelCase terms
+            r'\b(\d+(?:\.\d+)?)\b',  # Numbers
+        ]
+        
+        for sentence in sentences[:30]:
+            # Skip too short or too long sentences
+            if len(sentence) < 40 or len(sentence) > 300:
+                continue
+            
+            # Find potential words to mask
+            words = sentence.split()
+            if len(words) < 6:
+                continue
+            
+            # Try to find important terms to mask
+            candidates = []
+            
+            # Find capitalized words (likely important terms)
+            for i, word in enumerate(words):
+                clean_word = re.sub(r'[^\w]', '', word)
+                
+                # Skip common words
+                skip_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+                              'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+                              'could', 'should', 'may', 'might', 'must', 'can', 'this',
+                              'that', 'these', 'those', 'it', 'its', 'for', 'with', 'to',
+                              'of', 'in', 'on', 'at', 'by', 'from', 'up', 'about', 'into',
+                              'over', 'after', 'and', 'but', 'or', 'if', 'then', 'so', 'as'}
+                
+                if clean_word.lower() in skip_words:
+                    continue
+                
+                # Good candidates: proper nouns, technical terms, numbers
+                if len(clean_word) >= 4:
+                    if clean_word[0].isupper() or '_' in clean_word or any(c.isupper() for c in clean_word[1:]):
+                        candidates.append((i, word, clean_word, "term"))
+                    elif clean_word.isdigit() or re.match(r'\d+\.\d+', clean_word):
+                        candidates.append((i, word, clean_word, "number"))
+                    elif len(clean_word) >= 6:  # Longer words are often important
+                        candidates.append((i, word, clean_word, "word"))
+            
+            if not candidates:
+                continue
+            
+            # Pick a random candidate to mask
+            idx, original_word, clean_answer, word_type = random.choice(candidates)
+            
+            # Create masked sentence
+            masked_words = words.copy()
+            masked_words[idx] = "____"
+            masked_sentence = " ".join(masked_words)
+            
+            # Determine difficulty based on word type
+            difficulty = "easy" if word_type == "number" else "medium" if word_type == "term" else "hard"
+            
+            masked_tests.append(MaskedTest(
+                masked_text=masked_sentence,
+                answer=clean_answer,
+                original_text=sentence,
+                mask_position=idx,
+                domain=domain,
+                difficulty=difficulty,
+                tags=[domain.lower(), "cloze", word_type],
+            ))
+        
+        return masked_tests[:10]  # Limit to 10 masked tests per content
+    
+    async def extract_masked_tests(self, content: ScrapedContent, domain: str) -> list[MaskedTest]:
+        """Extract fill-in-the-blank tests from scraped content."""
+        masked_tests = self._generate_masked_tests(content.text, domain)
+        for test in masked_tests:
+            test.source_url = content.url
+        return masked_tests
+    
     async def process_content(
         self,
         contents: list[ScrapedContent],
         domain: str,
-        output_type: Literal["benchmark", "roleplay", "finetune", "all"] = "all"
+        output_type: Literal["benchmark", "roleplay", "finetune", "masked", "all"] = "all"
     ) -> dict:
         """Process scraped content - NO LLM NEEDED."""
         results = {
             "domain": domain,
             "sources": len(contents),
             "qa_pairs": [],
+            "masked_tests": [],
             "persona": None,
             "finetune_data": [],
         }
@@ -262,6 +360,14 @@ class DataProcessor:
                 results["qa_pairs"].extend(pairs)
                 if pairs:
                     console.print(f"  [green]✓[/green] {len(pairs)} pairs from {content.title[:50]}")
+        
+        if output_type in ("masked", "all"):
+            console.print(f"[cyan]Generating masked (fill-in-blank) tests...[/cyan]")
+            for content in contents:
+                masked = await self.extract_masked_tests(content, domain)
+                results["masked_tests"].extend(masked)
+                if masked:
+                    console.print(f"  [green]✓[/green] {len(masked)} cloze tests from {content.title[:50]}")
         
         if output_type in ("roleplay", "all"):
             console.print(f"[cyan]Generating persona for {domain}...[/cyan]")
@@ -276,6 +382,14 @@ class DataProcessor:
                     "messages": [
                         {"role": "user", "content": qa.question},
                         {"role": "assistant", "content": qa.answer},
+                    ]
+                })
+            # Also add masked tests to finetune data
+            for masked in results["masked_tests"]:
+                results["finetune_data"].append({
+                    "messages": [
+                        {"role": "user", "content": f"Fill in the blank: {masked.masked_text}"},
+                        {"role": "assistant", "content": masked.answer},
                     ]
                 })
         
@@ -294,6 +408,29 @@ def generate_test_cases_yaml(qa_pairs: list[QAPair], domain: str) -> dict:
         })
     return {
         "metadata": {"name": f"{domain.title()} - Knowledge Test"},
+        "defaults": {"temperature": 0},
+        "cases": cases,
+    }
+
+
+def generate_masked_test_cases_yaml(masked_tests: list[MaskedTest], domain: str) -> dict:
+    """Generate PromptLab test cases YAML from masked (cloze) tests."""
+    cases = []
+    for i, test in enumerate(masked_tests, 1):
+        cases.append({
+            "id": f"{domain.lower().replace(' ', '-')}-cloze-{i}",
+            "prompt": f"Fill in the blank with the correct word or phrase:\n\n{test.masked_text}",
+            "expected": test.answer,
+            "assertions": [
+                {"type": "contains", "value": test.answer, "case_sensitive": False}
+            ],
+            "tags": test.tags or [domain.lower(), "cloze"],
+        })
+    return {
+        "metadata": {
+            "name": f"{domain.title()} - Fill-in-the-Blank Tests",
+            "description": "Cloze tests to evaluate knowledge completion ability",
+        },
         "defaults": {"temperature": 0},
         "cases": cases,
     }
@@ -335,6 +472,14 @@ def save_outputs(results: dict, output_dir: Path, domain: str) -> dict[str, Path
             yaml.dump(test_yaml, f, default_flow_style=False, allow_unicode=True)
         saved_files["benchmark"] = test_path
         console.print(f"[green]✓[/green] Saved benchmark: {test_path}")
+    
+    if results.get("masked_tests"):
+        masked_yaml = generate_masked_test_cases_yaml(results["masked_tests"], domain)
+        masked_path = output_dir / f"{domain_slug}_cloze.yaml"
+        with open(masked_path, "w", encoding="utf-8") as f:
+            yaml.dump(masked_yaml, f, default_flow_style=False, allow_unicode=True)
+        saved_files["cloze"] = masked_path
+        console.print(f"[green]✓[/green] Saved cloze tests: {masked_path}")
     
     if results["persona"]:
         persona_yaml = generate_persona_yaml(results["persona"])

@@ -4,7 +4,7 @@ from typing import Optional, Literal
 from pydantic import BaseModel
 import asyncio
 
-from promptlab.mcp_servers.llm_runner.runner import LLMRunner, CompletionResult
+from promptlab.llm_council.llm_runner.runner import LLMRunner, CompletionResult
 
 
 class JudgeScore(BaseModel):
