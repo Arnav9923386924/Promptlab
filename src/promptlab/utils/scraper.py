@@ -613,7 +613,7 @@ class WebScraper:
             return []
     
     async def search_duckduckgo(self, query: str, num_results: int = 10) -> list[str]:
-        """Fallback search using DuckDuckGo library."""
+        """Fallback search using DuckDuckGo library (free, no auth)."""
         try:
             from duckduckgo_search import DDGS
             import warnings
@@ -622,25 +622,46 @@ class WebScraper:
             blocked_domains = {
                 'weforum.org', 'medium.com', 'linkedin.com', 'facebook.com', 
                 'twitter.com', 'instagram.com', 'reddit.com', 'zhihu.com',
-                'quora.com', 'pinterest.com', 'youtube.com', 'tiktok.com'
+                'quora.com', 'pinterest.com', 'youtube.com', 'tiktok.com',
+                'x.com', 'threads.net', 'tumblr.com', 'snapchat.com',
             }
             
+            # Block non-English TLDs
+            blocked_tlds = {'.jp', '.cn', '.kr', '.ru', '.de', '.fr', '.es', '.it', '.br', '.nl'}
+            
             urls = []
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, region='wt-wt', max_results=num_results * 3))
-                for r in results:
-                    url = r.get("href") or r.get("link")
-                    if not url:
-                        continue
-                    if any(d in url for d in blocked_domains):
-                        continue
-                    if self._is_valid_url(url) and url not in urls:
-                        urls.append(url)
+            
+            # Run synchronous DDG in executor to avoid blocking
+            def _search():
+                try:
+                    with DDGS() as ddgs:
+                        results = list(ddgs.text(query, region='us-en', max_results=num_results * 4))
+                        return results
+                except Exception:
+                    return []
+            
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(None, _search)
+            
+            for r in results:
+                url = r.get("href") or r.get("link")
+                if not url:
+                    continue
+                if any(d in url for d in blocked_domains):
+                    continue
+                # Skip non-English TLDs
+                if any(url.lower().endswith(tld) or tld + '/' in url.lower() for tld in blocked_tlds):
+                    continue
+                if self._is_valid_url(url) and url not in urls:
+                    urls.append(url)
             
             return urls[:num_results]
             
+        except ImportError:
+            # duckduckgo-search not installed
+            return []
         except Exception as e:
-            console.print(f"[dim]DuckDuckGo fallback failed: {e}[/dim]")
+            # Rate limited or other error - fail silently
             return []
     
     async def search_google_scrape(self, query: str, num_results: int = 10) -> list[str]:
@@ -681,47 +702,57 @@ class WebScraper:
             console.print(f"[dim]Google scrape failed: {e}[/dim]")
             return []
     
-    async def search(self, query: str, num_results: int = 10) -> list[str]:
+    async def search(self, query: str, num_results: int = 10, silent: bool = False) -> list[str]:
         """Search for URLs using available search providers.
         
-        Priority:
-        1. SerpAPI (Google results, 100 free/month, no CC required) ⭐
-        2. Brave Search API (good quality, requires CC for signup)
-        3. SearXNG (free, no auth, good quality)
-        4. DuckDuckGo library (sometimes rate limited)
-        5. Google scrape via browser (last resort, often blocked)
+        Priority (optimized for reliability):
+        1. SerpAPI (Google results, 100 free/month, no CC required) ⭐ BEST
+        2. DuckDuckGo library (free, usually works well)
+        3. SearXNG (free, no auth, multiple instances)
+        4. Brave Search API (good quality, requires CC for signup)
+        5. Google scrape via Playwright (last resort, often blocked)
+        
+        Args:
+            query: Search query
+            num_results: Number of results to return
+            silent: If True, don't print status messages
         """
+        def log(msg: str):
+            if not silent:
+                console.print(msg)
+        
         # Try SerpAPI first (best quality, free tier without CC)
         urls = await self.search_serpapi(query, num_results)
         if urls:
-            console.print(f"[cyan]Found {len(urls)} results via SerpAPI (Google)[/cyan]")
+            log(f"[dim]Found {len(urls)} results via SerpAPI[/dim]")
             return urls
         
-        # Try Brave Search (requires CC for signup)
-        urls = await self.search_brave(query, num_results)
+        # Try DuckDuckGo (moved up - more reliable than SearXNG)
+        urls = await self.search_duckduckgo(query, num_results)
         if urls:
-            console.print(f"[cyan]Found {len(urls)} results via Brave Search[/cyan]")
+            log(f"[dim]Found {len(urls)} results via DuckDuckGo[/dim]")
             return urls
         
         # Try SearXNG (completely free, no auth)
         urls = await self.search_searxng(query, num_results)
         if urls:
-            console.print(f"[cyan]Found {len(urls)} results via SearXNG[/cyan]")
+            log(f"[dim]Found {len(urls)} results via SearXNG[/dim]")
             return urls
         
-        # Fallback to DuckDuckGo
-        urls = await self.search_duckduckgo(query, num_results)
+        # Try Brave Search (requires CC for signup)
+        urls = await self.search_brave(query, num_results)
         if urls:
-            console.print(f"[cyan]Found {len(urls)} results via DuckDuckGo[/cyan]")
+            log(f"[dim]Found {len(urls)} results via Brave Search[/dim]")
             return urls
         
-        # Last resort: Google scrape
+        # Last resort: Google scrape via Playwright
         urls = await self.search_google_scrape(query, num_results)
         if urls:
-            console.print(f"[cyan]Found {len(urls)} results via Google[/cyan]")
+            log(f"[dim]Found {len(urls)} results via Google scrape[/dim]")
             return urls
         
-        console.print(f"[yellow]No search results for '{query}'[/yellow]")
+        if not silent:
+            console.print(f"[yellow]No search results for '{query}'[/yellow]")
         return []
     
     async def scrape_search_results(

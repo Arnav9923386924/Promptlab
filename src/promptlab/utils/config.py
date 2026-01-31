@@ -47,6 +47,9 @@ class BSPConfig(BaseModel):
     use_council: bool = True
     # Version tracking for BSP changes
     version: str = "1.0.0"
+    # Auto-generation settings
+    auto_generate: bool = True  # Enable auto test generation via scraping
+    auto_generate_count: int = 50  # Number of tests to generate
 
 
 class BaselineConfig(BaseModel):

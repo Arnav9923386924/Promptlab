@@ -4,7 +4,7 @@ import re
 import json
 from typing import Optional
 
-from promptlab.core.models import Assertion, AssertionType, AssertionResult
+from promptlab.orchestrators.models import Assertion, AssertionType, AssertionResult
 
 
 def run_assertion(assertion: Assertion, response: str) -> AssertionResult:

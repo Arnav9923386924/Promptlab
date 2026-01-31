@@ -102,7 +102,7 @@ def filter_tests_by_stage(test_files: list[Path], stage: str) -> list[Path]:
     Returns:
         Filtered list of test files
     """
-    from promptlab.core.parser import parse_test_file
+    from promptlab.orchestrators.parser import parse_test_file
     
     filtered = []
     for f in test_files:

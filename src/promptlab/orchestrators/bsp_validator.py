@@ -26,8 +26,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from promptlab.utils.config import PromptLabConfig, load_bsp
 from promptlab.llm_council.llm_runner.runner import LLMRunner
 from promptlab.llm_council.council.council import Council
-from promptlab.core.parser import parse_test_file, discover_test_files
-from promptlab.core.models import TestCase, TestSuite
+from promptlab.orchestrators.parser import parse_test_file, discover_test_files
+from promptlab.orchestrators.models import TestCase, TestSuite
 
 console = Console()
 
@@ -454,17 +454,24 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         self,
         test_dir: Optional[Path] = None,
         test_files: Optional[list[str]] = None,
+        auto_generate: bool = True,
+        generate_count: int = 50,
     ) -> ValidationResult:
         """Run complete BSP validation workflow.
+        
+        If no test files exist and auto_generate is True, tests will be
+        automatically generated via web scraping based on BSP analysis.
         
         Args:
             test_dir: Directory containing test files
             test_files: Specific test files to run
+            auto_generate: Whether to auto-generate tests if none exist
+            generate_count: Number of tests to generate if auto-generating
             
         Returns:
             ValidationResult with scores and comparison
         """
-        from promptlab.core.baseline import BaselineManager
+        from promptlab.orchestrators.baseline import BaselineManager
         
         if test_dir is None:
             test_dir = self.project_root / "temp"
@@ -475,8 +482,39 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         else:
             files = discover_test_files(test_dir)
         
+        # AUTO-GENERATE TESTS if none exist
+        if not files and auto_generate and self.bsp:
+            console.print("[yellow]No test files found. Auto-generating tests from BSP...[/yellow]\n")
+            
+            try:
+                from promptlab.utils.auto_test_generator import AutoTestGenerator
+                
+                # Get API keys from config
+                serpapi_key = self.config.scraper.serpapi_key if self.config.scraper else None
+                
+                generator = AutoTestGenerator(
+                    serpapi_key=serpapi_key,
+                    max_pages=20,
+                )
+                
+                generated = await generator.generate_tests(
+                    bsp=self.bsp,
+                    target_count=generate_count,
+                    output_dir=test_dir,
+                )
+                
+                console.print(f"\n[green]✓ Auto-generated {len(generated.qa_pairs) + len(generated.masked_tests)} tests in {generated.generation_time:.1f}s[/green]")
+                console.print(f"[green]✓ Tests saved to: {generated.output_file}[/green]\n")
+                
+                # Re-discover test files after generation
+                files = discover_test_files(test_dir)
+                
+            except Exception as e:
+                console.print(f"[red]Auto-generation failed: {e}[/red]")
+                console.print("[yellow]Falling back to manual test requirement.[/yellow]")
+        
         if not files:
-            raise ValueError(f"No test files found in {test_dir}")
+            raise ValueError(f"No test files found in {test_dir}. Create tests or enable auto-generation.")
         
         console.print(Panel(
             f"[bold]BSP Version:[/bold] {self.config.bsp.version}\n"

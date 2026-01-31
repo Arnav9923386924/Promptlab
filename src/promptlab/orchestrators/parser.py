@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Union
 import yaml
 
-from promptlab.core.models import TestSuite, TestCase, Assertion, TestSuiteDefaults, TestSuiteMetadata
+from promptlab.orchestrators.models import TestSuite, TestCase, Assertion, TestSuiteDefaults, TestSuiteMetadata
 
 
 def parse_test_file(path: Union[str, Path]) -> TestSuite:

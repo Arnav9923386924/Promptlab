@@ -24,7 +24,26 @@
 pip install promptlab
 ```
 
-### 2. Setup (Choose One)
+**Or install from source:**
+```bash
+git clone https://github.com/Arnav9923386924/Promptlab.git
+cd promptlab
+pip install -e .
+```
+
+### 2. Initialize Project
+
+```bash
+cd your-project
+promptlab init
+```
+
+This creates:
+- `promptlab.yaml` - Configuration file
+- `temp/` - Test files directory
+- `.promptlab/` - Baselines and run history
+
+### 3. Setup Provider
 
 **Using Ollama (Local, Free):**
 ```bash
@@ -36,7 +55,32 @@ promptlab setup ollama
 promptlab setup openrouter --api-key YOUR_KEY
 ```
 
-### 3. Run Tests
+### 4. Setup GitHub Actions (Auto-Integration)
+
+```bash
+promptlab ci-setup
+```
+
+This automatically creates `.github/workflows/prompt-tests.yml` with:
+- Test execution on PRs
+- BSP validation on main branch
+- Automatic baseline updates
+
+**Enable auto-push when BSP improves:**
+```bash
+promptlab ci-setup --auto-push
+```
+
+Then commit and push:
+```bash
+git add .github/workflows/prompt-tests.yml
+git commit -m "ci: add PromptLab workflow"
+git push
+```
+
+✅ **That's it! Your CI/CD is now active.**
+
+### 5. Run Tests
 
 **Test with existing YAML files:**
 ```bash
@@ -51,6 +95,11 @@ promptlab run roleplay --role "You are a Python expert"
 **Run HuggingFace benchmarks:**
 ```bash
 promptlab run performance
+```
+
+**Validate your BSP:**
+```bash
+promptlab validate
 ```
 
 ---
@@ -305,6 +354,95 @@ jobs:
 
 ---
 
+## 🚀 CI/CD Auto-Integration
+
+PromptLab automatically sets up GitHub Actions with one command.
+
+### Quick Setup:
+
+```bash
+# Navigate to your project
+cd your-project
+
+# Generate GitHub Actions workflow
+promptlab ci-setup
+
+# Commit and push
+git add .github/workflows/prompt-tests.yml
+git commit -m "ci: add PromptLab workflow"
+git push
+```
+
+✅ **Done! Your CI/CD is now active.**
+
+### Advanced Options:
+
+```bash
+# Enable auto-push when BSP score improves
+promptlab ci-setup --auto-push
+
+# Skip BSP validation job (only run basic tests)
+promptlab ci-setup --no-bsp
+
+# Customize later by editing .github/workflows/prompt-tests.yml
+```
+
+### What Gets Created:
+
+The `ci-setup` command generates a complete GitHub Actions workflow that:
+
+| Feature | Description |
+|---------|-------------|
+| **Test on PR** | Runs `promptlab test --ci` on every PR |
+| **BSP Validation** | Validates BSP on main branch pushes |
+| **Baseline Updates** | Automatically updates baselines when scores improve |
+| **Artifact Upload** | Saves validation results as artifacts |
+| **Auto-Push** | (Optional) Commits and pushes improved baselines |
+| **Ollama Installation** | Automatically installs and configures Ollama |
+| **PromptLab from PyPI** | Installs latest PromptLab via `pip install promptlab` |
+
+### Workflow Structure:
+
+```yaml
+# .github/workflows/prompt-tests.yml (auto-generated)
+name: Prompt Tests
+
+on:
+  pull_request:
+    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+  push:
+    branches: [main]
+
+jobs:
+  prompt-tests:         # Run on every PR
+    - pip install promptlab
+    - promptlab test --ci
+  
+  bsp-validation:       # Run on main branch only
+    - promptlab validate --ci
+    - Upload artifacts
+    - Auto-push if improved (optional)
+```
+
+### Using OpenRouter Instead of Ollama:
+
+If you prefer OpenRouter (cloud models), edit the workflow after generation:
+
+```yaml
+# Replace Ollama installation with:
+- name: Configure OpenRouter
+  env:
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  run: |
+    echo "OPENROUTER_API_KEY=${OPENROUTER_API_KEY}" >> $GITHUB_ENV
+```
+
+Add your API key to GitHub Secrets:
+1. Go to Settings → Secrets → Actions
+2. Add `OPENROUTER_API_KEY`
+
+---
+
 ## 🎚️ Council Modes
 
 | Mode | Stages | Speed | Use Case |
@@ -458,6 +596,26 @@ jobs:
 - [x] Parallel test execution
 - [ ] VS Code extension
 - [ ] Production log capture
+
+---
+
+## 📦 Publishing to PyPI (For Maintainers)
+
+```bash
+# Install build tools
+pip install build twine
+
+# Build the package
+python -m build
+
+# Upload to PyPI
+python -m twine upload dist/*
+```
+
+Users can then install with:
+```bash
+pip install promptlab
+```
 
 ---
 

@@ -154,7 +154,37 @@ class DataProcessor:
             if self._is_valid_qa(q, a):
                 qa_pairs.append((q, a))
         
-        return qa_pairs[:10]
+        # Pattern 4: "Why X?" followed by explanation
+        why_matches = re.findall(
+            r'(Why (?:is|are|do|does|should|would|can) [^?]+\?)\s*([^.!?]+[.!?](?:[^.!?]+[.!?])?)',
+            text, re.IGNORECASE
+        )
+        for q, a in why_matches:
+            q, a = q.strip(), a.strip()
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        # Pattern 5: "When X?" questions
+        when_matches = re.findall(
+            r'(When (?:should|do|does|is|are|to) [^?]+\?)\s*([^.!?]+[.!?](?:[^.!?]+[.!?])?)',
+            text, re.IGNORECASE
+        )
+        for q, a in when_matches:
+            q, a = q.strip(), a.strip()
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        # Pattern 6: "Which X?" questions
+        which_matches = re.findall(
+            r'(Which [^?]+\?)\s*([^.!?]+[.!?])',
+            text, re.IGNORECASE
+        )
+        for q, a in which_matches:
+            q, a = q.strip(), a.strip()
+            if self._is_valid_qa(q, a):
+                qa_pairs.append((q, a))
+        
+        return qa_pairs[:20]  # Increased from 10 to 20
     
     def _generate_questions_from_content(self, text: str, domain: str) -> list[QAPair]:
         """Generate Q&A pairs from content using text analysis."""
@@ -232,7 +262,7 @@ class DataProcessor:
                     tags=[domain.lower(), "definition"]
                 ))
         
-        return qa_pairs[:15]
+        return qa_pairs[:25]  # Increased from 15 to 25 for more tests
     
     async def extract_qa_pairs(self, content: ScrapedContent, domain: str) -> list[QAPair]:
         """Extract Q&A pairs from scraped content - NO LLM NEEDED."""
@@ -328,7 +358,7 @@ class DataProcessor:
                 tags=[domain.lower(), "cloze", word_type],
             ))
         
-        return masked_tests[:10]  # Limit to 10 masked tests per content
+        return masked_tests[:15]  # Increased from 10 to 15 masked tests per content
     
     async def extract_masked_tests(self, content: ScrapedContent, domain: str) -> list[MaskedTest]:
         """Extract fill-in-the-blank tests from scraped content."""

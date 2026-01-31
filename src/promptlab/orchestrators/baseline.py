@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel
 from rich.console import Console
 
-from promptlab.core.models import TestRun, TestResult
+from promptlab.orchestrators.models import TestRun, TestResult
 
 console = Console()
 

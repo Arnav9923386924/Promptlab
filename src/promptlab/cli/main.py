@@ -156,7 +156,7 @@ def test(
     """Run test suites."""
     import asyncio
     from promptlab.utils.config import load_config
-    from promptlab.core.runner import TestRunner, print_results
+    from promptlab.orchestrators.runner import TestRunner, print_results
     
     cwd = Path.cwd()
     config_path = cwd / "promptlab.yaml"
@@ -204,7 +204,7 @@ def baseline(
     tag: str = typer.Option(None, "--tag", "-t", help="Baseline tag name"),
 ):
     """Manage test baselines."""
-    from promptlab.core.baseline import BaselineManager
+    from promptlab.orchestrators.baseline import BaselineManager
     
     cwd = Path.cwd()
     promptlab_dir = cwd / ".promptlab"
@@ -364,28 +364,82 @@ jobs:
 
 
 @app.command("ci-setup")
-def ci_setup():
-    """Generate GitHub Actions workflow for CI/CD."""
+def ci_setup(
+    enable_bsp_validation: bool = typer.Option(True, "--bsp/--no-bsp", help="Include BSP validation job"),
+    enable_auto_push: bool = typer.Option(False, "--auto-push", help="Enable auto-push when BSP improves"),
+):
+    """Generate GitHub Actions workflow for CI/CD.
+    
+    Examples:
+      promptlab ci-setup                    # Basic CI with BSP validation
+      promptlab ci-setup --auto-push        # Enable auto-push on improvement
+      promptlab ci-setup --no-bsp           # Skip BSP validation job
+    """
     cwd = Path.cwd()
     workflows_dir = cwd / ".github" / "workflows"
     workflow_path = workflows_dir / "prompt-tests.yml"
     
+    # Check if promptlab.yaml exists
+    if not (cwd / "promptlab.yaml").exists():
+        console.print("[yellow]⚠️  No promptlab.yaml found. Run 'promptlab init' first.[/yellow]")
+        if not typer.confirm("Continue anyway?", default=False):
+            raise typer.Exit(0)
+    
     # Create directories
     workflows_dir.mkdir(parents=True, exist_ok=True)
     
+    # Modify workflow based on options
+    workflow_content = GITHUB_WORKFLOW
+    
+    if not enable_bsp_validation:
+        # Remove BSP validation job
+        lines = workflow_content.split('\n')
+        bsp_start = None
+        for i, line in enumerate(lines):
+            if 'bsp-validation:' in line:
+                bsp_start = i
+                break
+        if bsp_start:
+            workflow_content = '\n'.join(lines[:bsp_start])
+    
+    if enable_auto_push and enable_bsp_validation:
+        # Enable auto-push in the workflow
+        workflow_content = workflow_content.replace(
+            "# Uncomment to enable auto-push when score improves\n          # git config user.name github-actions\n          # git config user.email github-actions@github.com\n          # promptlab validate --push --ci\n          echo \"BSP Validation passed! Enable auto-push in workflow to automatically update baselines.\"",
+            "git config user.name github-actions\n          git config user.email github-actions@github.com\n          promptlab validate --push --ci"
+        )
+    
     # Write workflow
-    workflow_path.write_text(GITHUB_WORKFLOW)
+    workflow_path.write_text(workflow_content)
     
     console.print(f"[green]✓ Created {workflow_path}[/green]")
     console.print()
+    
+    # Build feature list
+    features = [
+        "• Run on PRs that modify prompts/tests/BSP",
+        "• Install PromptLab from pip automatically",
+        "• Install Ollama and run tests",
+        "• Block PRs if tests fail",
+    ]
+    
+    if enable_bsp_validation:
+        features.append("• BSP validation on main branch pushes")
+        features.append("• Upload validation artifacts")
+        if enable_auto_push:
+            features.append("• [bold cyan]Auto-push enabled[/bold cyan] when BSP score improves")
+        else:
+            features.append("• Auto-push [dim](disabled - use --auto-push to enable)[/dim]")
+    
     console.print(Panel(
-        "[bold]GitHub Actions workflow created![/bold]\n\n"
-        "The workflow will:\n"
-        "  • Run on PRs that modify prompts/tests\n"
-        "  • Install Ollama and run tests\n"
-        "  • Block PRs if tests fail\n\n"
-        "Commit and push to enable CI/CD.",
-        title="🚀 CI/CD Setup",
+        "[bold green]GitHub Actions workflow created![/bold green]\n\n"
+        "Features enabled:\n" + "\n".join(features) + "\n\n"
+        "[dim]Next steps:[/dim]\n"
+        "  1. git add .github/workflows/prompt-tests.yml\n"
+        "  2. git commit -m 'ci: add PromptLab workflow'\n"
+        "  3. git push\n\n"
+        "[cyan]Your CI/CD is ready! 🚀[/cyan]",
+        title="🚀 CI/CD Setup Complete",
         border_style="green",
     ))
 
@@ -515,7 +569,7 @@ def run_quick(
     """
     import asyncio
     from promptlab.utils.config import load_config
-    from promptlab.core.runner import TestRunner, print_results
+    from promptlab.orchestrators.runner import TestRunner, print_results
     from promptlab.llm_council.llm_runner.runner import LLMRunner
     
     cwd = Path.cwd()
@@ -670,19 +724,24 @@ def validate_bsp(
     auto_push: bool = typer.Option(False, "--push", "-p", help="Auto-push to git if score improves"),
     ci: bool = typer.Option(False, "--ci", help="CI mode - exit with code based on validation result"),
     output_json: str = typer.Option(None, "--output", "-o", help="Save validation result to JSON file"),
+    generate: int = typer.Option(None, "--generate", "-g", help="Auto-generate N test cases via web scraping (default: 50 if no tests exist)"),
+    no_generate: bool = typer.Option(False, "--no-generate", help="Disable auto-generation even if no tests exist"),
 ):
     """Validate your Behavior Specification Prompt (BSP) against test cases.
     
     This command runs the complete BSP validation workflow:
     1. Load BSP from config (promptlab.yaml)
-    2. Run all test cases with BSP prepended
-    3. Collect outputs for council review
-    4. Submit to LLM Council for batch evaluation
-    5. Compare score with baseline
-    6. Optionally push to git if improved
+    2. Auto-generate tests if none exist (via web scraping)
+    3. Run all test cases with BSP prepended
+    4. Collect outputs for council review
+    5. Submit to LLM Council for batch evaluation
+    6. Compare score with baseline
+    7. Optionally push to git if improved
     
     Examples:
-      promptlab validate                        # Run validation with defaults
+      promptlab validate                        # Run validation (auto-generates if no tests)
+      promptlab validate --generate 100         # Generate 100 tests via scraping
+      promptlab validate --no-generate          # Skip auto-generation, require manual tests
       promptlab validate --push                 # Push to git if improved
       promptlab validate --ci                   # CI mode for GitHub Actions
       promptlab validate -f temp/my_test.yaml   # Validate specific file
@@ -690,8 +749,8 @@ def validate_bsp(
     import asyncio
     import json as json_module
     from promptlab.utils.config import load_config, load_bsp
-    from promptlab.core.bsp_validator import BSPValidator
-    from promptlab.core.baseline import BaselineManager
+    from promptlab.orchestrators.bsp_validator import BSPValidator
+    from promptlab.orchestrators.baseline import BaselineManager
     from promptlab.utils.git_integration import GitIntegration
     
     cwd = Path.cwd()
@@ -721,6 +780,7 @@ def validate_bsp(
         f"[bold]Model:[/bold] {config.models.default}\n"
         f"[bold]Council:[/bold] {'enabled' if config.council.enabled else 'disabled'}\n"
         f"[bold]Test Dir:[/bold] {test_path}\n"
+        f"[bold]Auto Generate:[/bold] {'disabled' if no_generate else f'{generate or 50} tests'}\n"
         f"[bold]Auto Push:[/bold] {'yes' if auto_push else 'no'}",
         title="🔍 BSP Validation",
         border_style="blue",
@@ -730,10 +790,16 @@ def validate_bsp(
         # Create validator
         validator = BSPValidator(config, cwd)
         
+        # Determine auto-generation settings
+        should_auto_generate = not no_generate
+        target_count = generate if generate else 50
+        
         # Run validation
         result = await validator.validate(
             test_dir=test_path,
             test_files=list(files) if files else None,
+            auto_generate=should_auto_generate,
+            generate_count=target_count,
         )
         
         return result
@@ -807,6 +873,102 @@ def validate_bsp(
         console.print(f"[red]Error during validation: {e}[/red]")
         if ci:
             raise typer.Exit(2)
+        raise typer.Exit(1)
+
+
+@app.command("generate")
+def generate_tests(
+    count: int = typer.Option(50, "--count", "-n", help="Number of test cases to generate"),
+    output_dir: str = typer.Option("temp", "--output", "-o", help="Output directory for generated tests"),
+    max_pages: int = typer.Option(20, "--pages", "-p", help="Maximum pages to scrape"),
+):
+    """Auto-generate test cases from your BSP via web scraping.
+    
+    This command analyzes your BSP (Behavior Specification Prompt) to:
+    1. Extract domain, keywords, and capabilities
+    2. Generate smart search queries
+    3. Scrape relevant web content
+    4. Create 50-100 test cases automatically
+    
+    No manual test writing required!
+    
+    Examples:
+      promptlab generate                     # Generate 50 tests from BSP
+      promptlab generate --count 100         # Generate 100 tests
+      promptlab generate -n 25 -p 10         # Generate 25 tests from 10 pages
+    """
+    import asyncio
+    from promptlab.utils.config import load_config, load_bsp
+    from promptlab.utils.auto_test_generator import AutoTestGenerator
+    
+    cwd = Path.cwd()
+    config_path = cwd / "promptlab.yaml"
+    out_path = cwd / output_dir
+    
+    # Check if initialized
+    if not config_path.exists():
+        console.print("[red]✗ Not a PromptLab project. Run 'promptlab init' first.[/red]")
+        raise typer.Exit(1)
+    
+    # Load config
+    config = load_config(config_path)
+    
+    # Load BSP
+    bsp = load_bsp(config, cwd)
+    if not bsp:
+        console.print("[red]✗ No BSP configured. Add 'bsp' section to promptlab.yaml[/red]")
+        console.print("[dim]Example:[/dim]")
+        console.print("[dim]  bsp:[/dim]")
+        console.print("[dim]    prompt: 'You are a helpful assistant...'[/dim]")
+        console.print("[dim]    # OR[/dim]")
+        console.print("[dim]    prompt_file: bsp.txt[/dim]")
+        raise typer.Exit(1)
+    
+    console.print(Panel(
+        f"[bold]Target Tests:[/bold] {count}\n"
+        f"[bold]Max Pages:[/bold] {max_pages}\n"
+        f"[bold]Output:[/bold] {out_path}/\n"
+        f"[bold]BSP Preview:[/bold] {bsp[:100]}...",
+        title="🧪 Auto-Generate Tests from BSP",
+        border_style="blue",
+    ))
+    
+    async def run_generate():
+        serpapi_key = config.scraper.serpapi_key if config.scraper else None
+        
+        generator = AutoTestGenerator(
+            serpapi_key=serpapi_key,
+            max_pages=max_pages,
+        )
+        
+        result = await generator.generate_tests(
+            bsp=bsp,
+            target_count=count,
+            output_dir=out_path,
+        )
+        
+        return result
+    
+    try:
+        result = asyncio.run(run_generate())
+        
+        console.print()
+        console.print(Panel(
+            f"[bold green]✓ Tests generated successfully![/bold green]\n\n"
+            f"Domain: {result.domain}\n"
+            f"Q&A Tests: {len(result.qa_pairs)}\n"
+            f"Cloze Tests: {len(result.masked_tests)}\n"
+            f"Total: {len(result.qa_pairs) + len(result.masked_tests)} tests\n"
+            f"Sources Scraped: {result.scraped_sources}\n"
+            f"Time: {result.generation_time:.1f}s\n\n"
+            f"Output: [cyan]{result.output_file}[/cyan]\n\n"
+            f"[dim]Next: promptlab validate[/dim]",
+            title="🎉 Generation Complete",
+            border_style="green",
+        ))
+        
+    except Exception as e:
+        console.print(f"[red]Error generating tests: {e}[/red]")
         raise typer.Exit(1)
 
 
