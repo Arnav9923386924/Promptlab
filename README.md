@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">🧪 PromptLab</h1>
+  <img src="logo.png" alt="PromptLab" width="400">
 </p>
 
 <p align="center">
