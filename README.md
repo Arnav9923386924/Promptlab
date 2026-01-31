@@ -136,7 +136,7 @@ You're building an LLM-powered app. You have prompts in production. You make cha
 promptlab/
 ├── promptlab.yaml          # Your config (API keys, models)
 ├── promptlab.example.yaml  # Example config to copy
-├── tests/                  # Test YAML files
+├── temp/                   # Test YAML files
 │   ├── sentiment.yaml
 │   ├── code_review.yaml
 │   ├── council_test.yaml   # Tests using LLM Council
@@ -215,7 +215,7 @@ STAGE 3: Chairman Synthesis
 ### Council Test Example:
 
 ```yaml
-# tests/council_test.yaml
+# temp/council_test.yaml
 cases:
   - id: quality-check
     prompt: "Explain Python decorators in 2 sentences."
@@ -252,7 +252,7 @@ generator: openrouter/google/gemma-2-9b-it:free
 | `promptlab setup ollama` | Quick setup for Ollama |
 | `promptlab setup openrouter -k KEY` | Quick setup for OpenRouter |
 | `promptlab test` | Run all YAML tests |
-| `promptlab test tests/file.yaml` | Run specific test file |
+| `promptlab test temp/file.yaml` | Run specific test file |
 | `promptlab run roleplay` | Run existing roleplay tests |
 | `promptlab run roleplay --role "..."` | Generate + run tests for role |
 | `promptlab run performance` | Run HuggingFace benchmarks |
@@ -409,7 +409,7 @@ name: Prompt Tests
 
 on:
   pull_request:
-    paths: ['prompts/**', 'tests/**', 'promptlab.yaml']
+    paths: ['prompts/**', 'temp/**', 'promptlab.yaml']
   push:
     branches: [main]
 
@@ -464,7 +464,7 @@ Generate custom benchmarks from **any topic** by scraping the web - no static da
 promplab scrape "quantum computing" --pages 5 --output benchmark
 
 # Run the generated tests
-promplab test tests/benchmark.yaml
+promplab test temp/benchmark.yaml
 ```
 
 ### Tech Stack (Production-Grade):
@@ -521,7 +521,7 @@ promplab scrape "redis caching" --run
 ### Generated Output:
 
 ```yaml
-# tests/benchmark.yaml
+# temp/benchmark.yaml
 metadata:
   name: "Web-Scraped Test Suite: quantum computing"
   description: "Auto-generated from 5 web sources"
@@ -566,7 +566,7 @@ name: Prompt Tests
 
 on:
   pull_request:
-    paths: ['tests/**', 'promptlab.yaml']
+    paths: ['temp/**', 'promptlab.yaml']
 
 jobs:
   test:

@@ -522,7 +522,7 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             f"[bold]Model:[/bold] {self.config.models.default}\n"
             f"[bold]Test Files:[/bold] {len(files)}\n"
             f"[bold]Council:[/bold] {'enabled' if self.council else 'disabled'}",
-            title="🔍 BSP Validation",
+            title="BSP Validation",
             border_style="blue",
         ))
         

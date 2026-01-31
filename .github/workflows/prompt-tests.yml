@@ -1,101 +1,52 @@
 # PromptLab CI/CD Workflow
-# This workflow runs prompt tests on every PR that modifies prompts or tests
-
-name: Prompt Tests
+name: Prompt Validation
 
 on:
   pull_request:
-    paths:
-      - 'prompts/**'
-      - 'tests/**'
-      - 'promptlab.yaml'
+    paths: ['prompts/**', 'temp/**', 'promptlab.yaml', 'bsp/**']
   push:
-    branches:
-      - main
-    paths:
-      - 'prompts/**'
-      - 'tests/**'
-      - 'promptlab.yaml'
+    branches: [main]
+    paths: ['prompts/**', 'temp/**', 'promptlab.yaml', 'bsp/**']
 
 jobs:
-  prompt-tests:
+  validate:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
       - name: Install PromptLab
         run: pip install promptlab
       
-      # Option 1: Use Ollama (free, local)
       - name: Install Ollama
         run: |
           curl -fsSL https://ollama.ai/install.sh | sh
           ollama serve &
           sleep 5
           ollama pull llama3.1:8b
+          ollama pull mistral:7b
       
-      # Option 2: Use OpenRouter (faster, paid)
-      # Uncomment and add OPENROUTER_API_KEY to repository secrets
-      # env:
-      #   OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Run BSP Validation
+        run: promptlab validate --ci --output validation-result.json
       
-      - name: Run Prompt Tests
-        run: promptlab test --ci
-      
-      # Optional: Compare against baseline
-      # - name: Run with Baseline Check
-      #   run: promptlab test --ci --baseline main
-      
-      - name: Upload Test Results
+      - name: Upload Validation Results
         uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: prompt-test-results
-          path: .promptlab/runs/
-          retention-days: 30
-
-  # Optional: Separate job for baseline creation on main
-  update-baseline:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: prompt-tests
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+          name: validation-results
+          path: |
+            validation-result.json
+            .promptlab/runs/
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install PromptLab
-        run: pip install promptlab
-      
-      - name: Install Ollama
+      - name: Auto-Push on Improvement (optional)
+        if: success() && github.ref == 'refs/heads/main'
         run: |
-          curl -fsSL https://ollama.ai/install.sh | sh
-          ollama serve &
-          sleep 5
-          ollama pull llama3.1:8b
-      
-      - name: Create/Update Baseline
-        run: |
-          promptlab test --ci
-          # promptlab baseline create --tag main
-      
-      - name: Commit Baseline
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .promptlab/baselines/
-          git diff --staged --quiet || git commit -m "Update test baseline [skip ci]"
-          git push
+          # Uncomment to enable auto-push when score improves
+          # git config user.name github-actions
+          # git config user.email github-actions@github.com
+          # promptlab validate --push --ci
+          echo "BSP Validation passed! Enable auto-push in workflow to automatically update baselines."
