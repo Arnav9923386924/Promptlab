@@ -80,26 +80,23 @@ git push
 
 ✅ **That's it! Your CI/CD is now active.**
 
-### 5. Run Tests
+### 5. Run Validation
 
-**Test with existing YAML files:**
-```bash
-promptlab run roleplay
-```
-
-**Dynamic test generation (auto-creates tests for any role):**
-```bash
-promptlab run roleplay --role "You are a Python expert"
-```
-
-**Run HuggingFace benchmarks:**
-```bash
-promptlab run performance
-```
-
-**Validate your BSP:**
+**The main command - does everything:**
 ```bash
 promptlab validate
+```
+
+This single command:
+1. Loads your BSP from config
+2. Auto-generates tests via web scraping (if none exist)
+3. Runs tests against your LLM
+4. LLM Council evaluates the outputs
+5. Compares with baseline and tracks improvement
+
+**Push to git if improved:**
+```bash
+promptlab validate --push
 ```
 
 ---
@@ -121,10 +118,10 @@ You're building an LLM-powered app. You have prompts in production. You make cha
 
 | Feature | Description |
 |---------|-------------|
-| **Dynamic Test Generation** | `--role "You are X"` → Auto-generates relevant tests |
-| **Web Scraping** | Dynamic benchmark generation from any topic with production-grade stack |
+| **Auto Test Generation** | Web scrapes domain-relevant test cases from BSP |
+| **Web Scraping** | Dynamic benchmark generation from any topic |
 | **LLM Council** | Multiple models evaluate responses, reach consensus |
-| **HuggingFace Benchmarks** | Import MMLU, GSM8K, TruthfulQA with one command |
+| **Baseline Tracking** | Tracks score improvement/regression over time |
 | **Parallel Execution** | Run tests concurrently for speed |
 | **OpenRouter + Ollama** | Use local or cloud models seamlessly |
 
@@ -244,21 +241,15 @@ generator: openrouter/google/gemma-2-9b-it:free
 
 ---
 
-## 📋 Commands Reference
+## Commands Reference
 
 | Command | Description |
 |---------|-------------|
 | `promptlab init` | Initialize project with example config |
 | `promptlab setup ollama` | Quick setup for Ollama |
 | `promptlab setup openrouter -k KEY` | Quick setup for OpenRouter |
-| `promptlab test` | Run all YAML tests |
-| `promptlab test temp/file.yaml` | Run specific test file |
-| `promptlab run roleplay` | Run existing roleplay tests |
-| `promptlab run roleplay --role "..."` | Generate + run tests for role |
-| `promptlab run performance` | Run HuggingFace benchmarks |
-| `promptlab benchmark gsm8k` | Download GSM8K benchmark |
-| `promptlab scrape "topic" --pages N` | Scrape web to generate benchmarks dynamically |
-| `promptlab validate` | Validate BSP and compare with baseline |
+| `promptlab ci-setup` | Generate GitHub Actions workflow |
+| `promptlab validate` | Main command - validates BSP with auto-test generation |
 | `promptlab validate --push` | Validate and push to git if improved |
 | `promptlab validate --ci` | CI mode for GitHub Actions |
 
@@ -405,23 +396,24 @@ The `ci-setup` command generates a complete GitHub Actions workflow that:
 
 ```yaml
 # .github/workflows/prompt-tests.yml (auto-generated)
-name: Prompt Tests
+name: Prompt Validation
 
 on:
   pull_request:
-    paths: ['prompts/**', 'temp/**', 'promptlab.yaml']
+    paths: ['prompts/**', 'temp/**', 'promptlab.yaml', 'bsp/**']
   push:
     branches: [main]
 
 jobs:
-  prompt-tests:         # Run on every PR
-    - pip install promptlab
-    - promptlab test --ci
-  
-  bsp-validation:       # Run on main branch only
-    - promptlab validate --ci
-    - Upload artifacts
-    - Auto-push if improved (optional)
+  validate:              # Single job handles everything
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - run: pip install promptlab
+      - run: promptlab validate --ci
+      - Upload artifacts
+      - Auto-push if improved (optional)
 ```
 
 ### Using OpenRouter Instead of Ollama:
@@ -453,19 +445,18 @@ Add your API key to GitHub Secrets:
 
 ---
 
-## 🌐 Web Scraping (Dynamic Benchmark Generation)
+## Web Scraping (Auto Test Generation)
 
-Generate custom benchmarks from **any topic** by scraping the web - no static datasets required!
+PromptLab auto-generates tests by scraping the web based on your BSP analysis - no manual test writing required!
 
-### Quick Example:
+### How It Works:
 
-```bash
-# Scrape 5 pages about quantum computing
-promplab scrape "quantum computing" --pages 5 --output benchmark
-
-# Run the generated tests
-promplab test temp/benchmark.yaml
-```
+When you run `promptlab validate` and no tests exist:
+1. Analyzes your BSP to extract domain, keywords, and capabilities
+2. Generates smart search queries
+3. Scrapes relevant web content
+4. Creates Q&A and cloze test cases automatically
+5. Saves tests to `temp/` directory
 
 ### Tech Stack (Production-Grade):
 
