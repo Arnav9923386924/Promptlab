@@ -202,6 +202,8 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
     ) -> BatchOutput:
         """Run all tests with BSP prepended to prompts.
         
+        Includes rate limiting to avoid 429 errors from API providers.
+        
         Args:
             test_files: List of test file paths
             show_progress: Whether to show progress bar
@@ -209,6 +211,8 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         Returns:
             BatchOutput containing all test outputs
         """
+        import asyncio
+        
         run_id = f"bsp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         outputs: list[TestOutput] = []
         
@@ -219,7 +223,11 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             for case in suite.cases:
                 all_cases.append((case, suite))
         
-        console.print(f"[cyan]Running {len(all_cases)} tests with BSP...[/cyan]")
+        console.print(f"[cyan]Running {len(all_cases)} tests with BSP (rate-limited)...[/cyan]")
+        
+        # Rate limiting: delay between requests to avoid 429 errors
+        # OpenRouter free tier: ~20 req/min, so ~3 seconds between requests
+        rate_limit_delay = 3.0  # seconds between API calls
         
         if show_progress:
             with Progress(
@@ -229,15 +237,23 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             ) as progress:
                 task = progress.add_task("Running tests...", total=len(all_cases))
                 
-                for case, suite in all_cases:
+                for i, (case, suite) in enumerate(all_cases):
                     progress.update(task, description=f"Running: {case.id}")
                     output = await self._run_single_test(case, suite)
                     outputs.append(output)
                     progress.advance(task)
+                    
+                    # Rate limiting: wait between requests (skip for last one)
+                    if i < len(all_cases) - 1:
+                        await asyncio.sleep(rate_limit_delay)
         else:
-            for case, suite in all_cases:
+            for i, (case, suite) in enumerate(all_cases):
                 output = await self._run_single_test(case, suite)
                 outputs.append(output)
+                
+                # Rate limiting
+                if i < len(all_cases) - 1:
+                    await asyncio.sleep(rate_limit_delay)
         
         return BatchOutput(
             run_id=run_id,
@@ -314,7 +330,11 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         return output_file
     
     async def evaluate_batch_with_council(self, batch: BatchOutput) -> CouncilBatchResult:
-        """Evaluate batch outputs using LLM Council.
+        """Evaluate batch outputs using LLM Council with BATCH processing.
+        
+        This uses batch evaluation to dramatically reduce API calls:
+        - Old: n tests × m judges = n×m API calls (e.g., 30×3 = 90 calls)
+        - New: 1 batch × m judges = m API calls (e.g., 1×3 = 3 calls)
         
         Args:
             batch: Batch output to evaluate
@@ -326,38 +346,44 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             # If no council, use single LLM evaluation
             return await self._evaluate_with_single_llm(batch)
         
-        console.print("[cyan]Submitting outputs to LLM Council for evaluation...[/cyan]")
+        console.print("[cyan]Submitting outputs to LLM Council for BATCH evaluation...[/cyan]")
+        console.print(f"[dim]  → {len(batch.outputs)} tests evaluated in {len(self.council.members)} API calls (batch mode)[/dim]")
         
-        # Format outputs for evaluation (limit to prevent token overflow)
-        outputs_text = self._format_outputs_for_evaluation(batch.outputs[:20])
+        # Prepare outputs for batch evaluation
+        outputs_for_batch = [
+            {
+                "test_id": out.test_id,
+                "prompt": out.prompt,
+                "response": out.response,
+                "expected": out.expected,
+            }
+            for out in batch.outputs
+        ]
         
-        # Create evaluation prompt
-        eval_prompt = self.BATCH_EVALUATION_PROMPT.format(
-            bsp=batch.bsp[:1000] if batch.bsp else "No BSP specified",
-            outputs=outputs_text,
-        )
-        
-        # Run council evaluation
-        council_result = await self.council.evaluate(
-            response=outputs_text,
-            criteria=f"Evaluate BSP performance: {batch.bsp[:200]}",
+        # Use batch evaluation - ONE API call per judge
+        batch_result = await self.council.evaluate_batch(
+            outputs=outputs_for_batch,
+            bsp=batch.bsp,
             min_score=self.config.bsp.min_score,
-            mode=self.config.council.mode,
         )
-        
-        # Parse detailed scores from chairman's synthesis
-        scores = self._parse_batch_scores(council_result.consensus_summary)
         
         return CouncilBatchResult(
-            final_score=council_result.final_score,
-            passed=council_result.passed,
-            confidence=council_result.confidence,
+            final_score=batch_result.final_score,
+            passed=batch_result.passed,
+            confidence=batch_result.confidence,
             individual_scores=[
-                {"model": s.model, "score": s.score, "reasoning": s.reasoning}
-                for s in council_result.member_scores
+                {
+                    "model": s.model,
+                    "score": s.overall_score,
+                    "reasoning": s.reasoning,
+                    "role_adherence": s.role_adherence,
+                    "response_quality": s.response_quality,
+                    "consistency": s.consistency,
+                }
+                for s in batch_result.member_scores
             ],
-            summary=council_result.consensus_summary,
-            recommendations=scores.get("recommendations", []),
+            summary=batch_result.summary,
+            recommendations=batch_result.recommendations,
         )
     
     async def _evaluate_with_single_llm(self, batch: BatchOutput) -> CouncilBatchResult:

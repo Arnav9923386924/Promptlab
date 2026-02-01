@@ -1,6 +1,7 @@
 """LLM Runner - Unified interface to multiple LLM providers."""
 
 import httpx
+import asyncio
 from typing import Optional
 from pydantic import BaseModel
 import time
@@ -175,7 +176,10 @@ class LLMRunner:
         temperature: float,
         max_tokens: int,
     ) -> CompletionResult:
-        """Complete using OpenAI-compatible API (OpenAI, OpenRouter, xAI)."""
+        """Complete using OpenAI-compatible API (OpenAI, OpenRouter, xAI).
+        
+        Includes retry logic with exponential backoff for rate limiting (429 errors).
+        """
         api_key = self._get_api_key(provider)
         endpoint = self.ENDPOINTS[provider]
         
@@ -195,28 +199,73 @@ class LLMRunner:
             headers["X-Title"] = "PromptLab"
         
         client = await self._get_client()
-        response = await client.post(
-            endpoint,
-            headers=headers,
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
         
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        usage = data.get("usage", {})
+        # Retry logic with exponential backoff for rate limiting
+        max_retries = 5
+        base_delay = 2.0  # Start with 2 second delay
         
-        return CompletionResult(
-            text=text,
-            tokens_in=usage.get("prompt_tokens", 0),
-            tokens_out=usage.get("completion_tokens", 0),
-            cost_usd=0.0,
-        )
+        for attempt in range(max_retries):
+            try:
+                response = await client.post(
+                    endpoint,
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    },
+                    timeout=120.0,
+                )
+                
+                # Handle rate limiting (429)
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 2s, 4s, 8s, 16s, 32s
+                        delay = base_delay * (2 ** attempt)
+                        # Check if server tells us how long to wait
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                delay = max(delay, float(retry_after))
+                            except ValueError:
+                                pass
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise httpx.HTTPStatusError(
+                            f"Rate limited after {max_retries} retries",
+                            request=response.request,
+                            response=response,
+                        )
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+                
+                return CompletionResult(
+                    text=text,
+                    tokens_in=usage.get("prompt_tokens", 0),
+                    tokens_out=usage.get("completion_tokens", 0),
+                    cost_usd=0.0,
+                )
+                
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except httpx.TimeoutException:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(base_delay)
+                    continue
+                raise
+        
+        # Should not reach here, but just in case
+        raise RuntimeError(f"Failed after {max_retries} attempts")
     
     async def _complete_anthropic(
         self,

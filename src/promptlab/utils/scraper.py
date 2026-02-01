@@ -521,16 +521,26 @@ class WebScraper:
                     "api_key": api_key,
                     "num": num_results,
                     "engine": "google",
-                }
+                },
+                timeout=30.0,
             )
             response.raise_for_status()
             
             data = response.json()
+            
+            # Check for API errors
+            if "error" in data:
+                console.print(f"[yellow]SerpAPI error: {data['error']}[/yellow]")
+                return []
+            
             urls = []
             for result in data.get("organic_results", []):
                 url = result.get("link")
                 if url and self._is_valid_url(url):
                     urls.append(url)
+            
+            if urls:
+                console.print(f"[green]✓ SerpAPI returned {len(urls)} results[/green]")
             
             return urls[:num_results]
             
@@ -615,7 +625,7 @@ class WebScraper:
     async def search_duckduckgo(self, query: str, num_results: int = 10) -> list[str]:
         """Fallback search using DuckDuckGo library (free, no auth)."""
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             import warnings
             warnings.filterwarnings("ignore")
             
