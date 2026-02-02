@@ -377,6 +377,9 @@ SUMMARY: [1-2 sentence consensus summary]
         total_tests: int,
     ) -> list["BatchJudgeScore"]:
         """Stage 1: Each judge evaluates the ENTIRE batch in ONE API call."""
+        from rich.console import Console
+        console = Console()
+        
         tasks = []
         
         for model in self.members:
@@ -392,13 +395,20 @@ SUMMARY: [1-2 sentence consensus summary]
         scores = []
         for model, result in zip(self.members, results):
             if isinstance(result, Exception):
+                error_msg = str(result)
+                console.print(f"[red]  ✗ Judge {model.split('/')[-1][:20]} failed: {error_msg[:60]}[/red]")
+                
+                # Check if it's a rate limit error
+                if "429" in error_msg or "rate" in error_msg.lower():
+                    console.print(f"[yellow]    → Rate limited. Try using different models for council.[/yellow]")
+                
                 scores.append(BatchJudgeScore(
                     model=model,
                     overall_score=0.5,
                     role_adherence=0.5,
                     response_quality=0.5,
                     consistency=0.5,
-                    reasoning=f"Error: {result}",
+                    reasoning=f"Error: {error_msg[:100]}",
                     weak_areas=[],
                 ))
             else:
@@ -407,47 +417,138 @@ SUMMARY: [1-2 sentence consensus summary]
         return scores
     
     async def _get_batch_judge_score(self, model: str, prompt: str) -> "BatchJudgeScore":
-        """Get batch score from a single judge (ONE API call for ALL outputs)."""
+        """Get batch score from a single judge (ONE API call for ALL outputs).
+        
+        Uses robust parsing with multiple fallback strategies:
+        1. Exact format matching (OVERALL_SCORE: 0.85)
+        2. Regex patterns for variations
+        3. Narrative text analysis
+        """
+        import re
+        from rich.console import Console
+        console = Console()
+        
         result = await self.llm_runner.complete(prompt, model=model, temperature=0, max_tokens=1500)
         
-        # Parse response
+        # Debug: Show raw response (truncated)
+        console.print(f"[dim]  Judge {model.split('/')[-1][:20]} responded ({len(result.text)} chars)[/dim]")
+        
+        # Parse response with multiple strategies
         score_data = {
-            "overall_score": 0.5,
-            "role_adherence": 0.5,
-            "response_quality": 0.5,
-            "consistency": 0.5,
+            "overall_score": None,  # None = not found yet
+            "role_adherence": None,
+            "response_quality": None,
+            "consistency": None,
             "reasoning": "",
             "weak_areas": [],
         }
         
-        for line in result.text.split("\n"):
+        text = result.text
+        
+        # Strategy 1: Exact line matching (original method)
+        for line in text.split("\n"):
             line = line.strip()
-            if line.startswith("OVERALL_SCORE:"):
+            if line.upper().startswith("OVERALL_SCORE:") or line.upper().startswith("OVERALL SCORE:"):
                 try:
-                    score_data["overall_score"] = max(0.0, min(1.0, float(line.split(":")[-1].strip())))
+                    val = re.search(r'[\d.]+', line.split(":")[-1])
+                    if val:
+                        score_data["overall_score"] = max(0.0, min(1.0, float(val.group())))
                 except ValueError:
                     pass
-            elif line.startswith("ROLE_ADHERENCE:"):
+            elif line.upper().startswith("ROLE_ADHERENCE:") or line.upper().startswith("ROLE ADHERENCE:"):
                 try:
-                    score_data["role_adherence"] = max(0.0, min(1.0, float(line.split(":")[-1].strip())))
+                    val = re.search(r'[\d.]+', line.split(":")[-1])
+                    if val:
+                        score_data["role_adherence"] = max(0.0, min(1.0, float(val.group())))
                 except ValueError:
                     pass
-            elif line.startswith("RESPONSE_QUALITY:"):
+            elif line.upper().startswith("RESPONSE_QUALITY:") or line.upper().startswith("RESPONSE QUALITY:"):
                 try:
-                    score_data["response_quality"] = max(0.0, min(1.0, float(line.split(":")[-1].strip())))
+                    val = re.search(r'[\d.]+', line.split(":")[-1])
+                    if val:
+                        score_data["response_quality"] = max(0.0, min(1.0, float(val.group())))
                 except ValueError:
                     pass
-            elif line.startswith("CONSISTENCY:"):
+            elif line.upper().startswith("CONSISTENCY:"):
                 try:
-                    score_data["consistency"] = max(0.0, min(1.0, float(line.split(":")[-1].strip())))
+                    val = re.search(r'[\d.]+', line.split(":")[-1])
+                    if val:
+                        score_data["consistency"] = max(0.0, min(1.0, float(val.group())))
                 except ValueError:
                     pass
-            elif line.startswith("REASONING:"):
+            elif line.upper().startswith("REASONING:"):
                 score_data["reasoning"] = line.split(":", 1)[-1].strip()
-            elif line.startswith("WEAK_AREAS:"):
+            elif line.upper().startswith("WEAK_AREAS:") or line.upper().startswith("WEAK AREAS:"):
                 areas = line.split(":", 1)[-1].strip()
                 if areas.lower() != "none":
                     score_data["weak_areas"] = [a.strip() for a in areas.split(",") if a.strip()]
+        
+        # Strategy 2: Regex fallback for common variations
+        if score_data["overall_score"] is None:
+            # Try patterns like "Overall Score: 0.85" or "overall: 0.85" or "Score: 0.85/1.0"
+            patterns = [
+                r'(?:overall|final|total)[\s_]*(?:score)?[\s:=]+([0-9.]+)',
+                r'(?:score|rating)[\s:=]+([0-9.]+)(?:\s*/\s*1)?',
+                r'\b([0-9]\.[0-9]+)\s*/\s*1(?:\.0)?',  # Match "0.85/1" or "0.85/1.0"
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    try:
+                        val = float(match.group(1))
+                        if 0 <= val <= 1:
+                            score_data["overall_score"] = val
+                            console.print(f"[yellow]    → Parsed score via regex: {val:.2f}[/yellow]")
+                            break
+                        elif 1 < val <= 10:  # Handle 0-10 scale
+                            score_data["overall_score"] = val / 10
+                            console.print(f"[yellow]    → Parsed score (0-10 scale): {val/10:.2f}[/yellow]")
+                            break
+                        elif 10 < val <= 100:  # Handle percentage
+                            score_data["overall_score"] = val / 100
+                            console.print(f"[yellow]    → Parsed score (percentage): {val/100:.2f}[/yellow]")
+                            break
+                    except ValueError:
+                        pass
+        
+        # Strategy 3: Sentiment-based fallback if no score found
+        if score_data["overall_score"] is None:
+            console.print(f"[red]    ⚠ No score parsed, analyzing sentiment...[/red]")
+            # Analyze text for positive/negative indicators
+            positive_words = ['excellent', 'good', 'well', 'correct', 'accurate', 'helpful', 'clear', 'proper', 'appropriate', 'follows', 'adheres', 'compliant']
+            negative_words = ['poor', 'bad', 'wrong', 'incorrect', 'missing', 'fails', 'violates', 'lacks', 'inadequate', 'inconsistent']
+            
+            text_lower = text.lower()
+            positive_count = sum(1 for w in positive_words if w in text_lower)
+            negative_count = sum(1 for w in negative_words if w in text_lower)
+            
+            # Calculate sentiment score
+            if positive_count + negative_count > 0:
+                sentiment_score = 0.5 + 0.3 * (positive_count - negative_count) / (positive_count + negative_count + 1)
+                score_data["overall_score"] = max(0.2, min(0.9, sentiment_score))
+                console.print(f"[yellow]    → Estimated from sentiment: {score_data['overall_score']:.2f}[/yellow]")
+            else:
+                score_data["overall_score"] = 0.5
+                console.print(f"[red]    → Defaulting to 0.5 (no indicators found)[/red]")
+        
+        # Fill in None values with overall_score as fallback
+        final_overall = score_data["overall_score"] or 0.5
+        for key in ["role_adherence", "response_quality", "consistency"]:
+            if score_data[key] is None:
+                score_data[key] = final_overall
+        
+        # Extract reasoning if not found
+        if not score_data["reasoning"]:
+            # Try to extract a summary sentence
+            sentences = text.split(".")
+            for sent in sentences:
+                if any(word in sent.lower() for word in ["overall", "summary", "conclusion", "score"]):
+                    score_data["reasoning"] = sent.strip()[:200]
+                    break
+            if not score_data["reasoning"]:
+                score_data["reasoning"] = text[:200].strip()
+        
+        console.print(f"[green]    ✓ Final score: {final_overall:.2f}[/green]")
         
         return BatchJudgeScore(model=model, **score_data)
     

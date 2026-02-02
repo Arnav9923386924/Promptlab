@@ -122,6 +122,15 @@ def load_config(path: Optional[Path] = None) -> PromptLabConfig:
                     env_var = api_key[2:-1]
                     config["api_key"] = os.environ.get(env_var, "")
     
+    # Expand environment variables in scraper config
+    if "scraper" in data:
+        for key in ["serpapi_key", "brave_api_key"]:
+            if key in data["scraper"]:
+                value = data["scraper"][key]
+                if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+                    env_var = value[2:-1]
+                    data["scraper"][key] = os.environ.get(env_var, "")
+    
     # Load BSP from file if specified
     if "bsp" in data and "prompt_file" in data["bsp"]:
         bsp_file = Path(data["bsp"]["prompt_file"])
