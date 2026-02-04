@@ -426,12 +426,18 @@ SUMMARY: [1-2 sentence consensus summary]
         """
         import re
         from rich.console import Console
+        from rich.panel import Panel
         console = Console()
         
         result = await self.llm_runner.complete(prompt, model=model, temperature=0, max_tokens=1500)
         
-        # Debug: Show raw response (truncated)
-        console.print(f"[dim]  Judge {model.split('/')[-1][:20]} responded ({len(result.text)} chars)[/dim]")
+        # DEBUG: Show FULL raw response to diagnose parsing issues
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold cyan]JUDGE: {model}[/bold cyan]")
+        console.print(f"[bold cyan]Response length: {len(result.text)} chars[/bold cyan]")
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+        console.print(Panel(result.text[:1500] if len(result.text) > 1500 else result.text, title="RAW RESPONSE", border_style="yellow"))
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
         
         # Parse response with multiple strategies
         score_data = {
@@ -446,6 +452,7 @@ SUMMARY: [1-2 sentence consensus summary]
         text = result.text
         
         # Strategy 1: Exact line matching (original method)
+        console.print("[dim]  Trying Strategy 1: Exact line matching...[/dim]")
         for line in text.split("\n"):
             line = line.strip()
             if line.upper().startswith("OVERALL_SCORE:") or line.upper().startswith("OVERALL SCORE:"):
@@ -453,6 +460,7 @@ SUMMARY: [1-2 sentence consensus summary]
                     val = re.search(r'[\d.]+', line.split(":")[-1])
                     if val:
                         score_data["overall_score"] = max(0.0, min(1.0, float(val.group())))
+                        console.print(f"[green]    ✓ Found OVERALL_SCORE: {score_data['overall_score']}[/green]")
                 except ValueError:
                     pass
             elif line.upper().startswith("ROLE_ADHERENCE:") or line.upper().startswith("ROLE ADHERENCE:"):
@@ -460,6 +468,7 @@ SUMMARY: [1-2 sentence consensus summary]
                     val = re.search(r'[\d.]+', line.split(":")[-1])
                     if val:
                         score_data["role_adherence"] = max(0.0, min(1.0, float(val.group())))
+                        console.print(f"[green]    ✓ Found ROLE_ADHERENCE: {score_data['role_adherence']}[/green]")
                 except ValueError:
                     pass
             elif line.upper().startswith("RESPONSE_QUALITY:") or line.upper().startswith("RESPONSE QUALITY:"):
@@ -467,6 +476,7 @@ SUMMARY: [1-2 sentence consensus summary]
                     val = re.search(r'[\d.]+', line.split(":")[-1])
                     if val:
                         score_data["response_quality"] = max(0.0, min(1.0, float(val.group())))
+                        console.print(f"[green]    ✓ Found RESPONSE_QUALITY: {score_data['response_quality']}[/green]")
                 except ValueError:
                     pass
             elif line.upper().startswith("CONSISTENCY:"):
@@ -474,6 +484,7 @@ SUMMARY: [1-2 sentence consensus summary]
                     val = re.search(r'[\d.]+', line.split(":")[-1])
                     if val:
                         score_data["consistency"] = max(0.0, min(1.0, float(val.group())))
+                        console.print(f"[green]    ✓ Found CONSISTENCY: {score_data['consistency']}[/green]")
                 except ValueError:
                     pass
             elif line.upper().startswith("REASONING:"):
@@ -485,6 +496,7 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Strategy 2: Regex fallback for common variations
         if score_data["overall_score"] is None:
+            console.print("[dim]  Trying Strategy 2: Regex patterns...[/dim]")
             # Try patterns like "Overall Score: 0.85" or "overall: 0.85" or "Score: 0.85/1.0"
             patterns = [
                 r'(?:overall|final|total)[\s_]*(?:score)?[\s:=]+([0-9.]+)',
@@ -513,7 +525,8 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Strategy 3: Sentiment-based fallback if no score found
         if score_data["overall_score"] is None:
-            console.print(f"[red]    ⚠ No score parsed, analyzing sentiment...[/red]")
+            console.print(f"[red]  Strategy 3: Sentiment analysis (FALLBACK - no score found!)[/red]")
+            console.print(f"[red]  ⚠️ THIS IS WHY YOU'RE GETTING 0.5! Model didn't return expected format.[/red]")
             # Analyze text for positive/negative indicators
             positive_words = ['excellent', 'good', 'well', 'correct', 'accurate', 'helpful', 'clear', 'proper', 'appropriate', 'follows', 'adheres', 'compliant']
             negative_words = ['poor', 'bad', 'wrong', 'incorrect', 'missing', 'fails', 'violates', 'lacks', 'inadequate', 'inconsistent']
@@ -521,6 +534,8 @@ SUMMARY: [1-2 sentence consensus summary]
             text_lower = text.lower()
             positive_count = sum(1 for w in positive_words if w in text_lower)
             negative_count = sum(1 for w in negative_words if w in text_lower)
+            
+            console.print(f"[dim]    Positive words found: {positive_count}, Negative: {negative_count}[/dim]")
             
             # Calculate sentiment score
             if positive_count + negative_count > 0:
