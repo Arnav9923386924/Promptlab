@@ -580,21 +580,6 @@ See `CONTRIBUTING.md` for guidelines.
 
 ---
 
-## 📄 License
-
-MIT License - Free for commercial and personal use.
-
----
-
-## 🔗 Resources
-
-- **Documentation**: Full reference at project wiki
-- **Examples**: Sample BSPs and configurations in `examples/`
-- **Community**: Discussions and support on GitHub
-- **Issues**: Bug reports and feature requests
-
----
-
 <p align="center">
   <b>Stop testing prompts manually. Start shipping with confidence.</b><br>
   <sub>PromptLab: CI/CD for the LLM era</sub>
