@@ -327,7 +327,7 @@ class LLMRunner:
         temperature: float,
         max_tokens: int,
     ) -> CompletionResult:
-        """Complete using Google Gemini API."""
+        """Complete using Google Gemini API with retry on rate-limit (429)."""
         api_key = self._get_api_key("google")
         endpoint = self.ENDPOINTS["google"].format(model=model)
         
@@ -346,19 +346,48 @@ class LLMRunner:
             "parts": [{"text": prompt}]
         })
         
-        client = await self._get_client()
-        response = await client.post(
-            f"{endpoint}?key={api_key}",
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": temperature,
-                    "maxOutputTokens": max_tokens,
-                },
+        request_body = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
             },
-        )
-        response.raise_for_status()
+        }
+        
+        # Retry with exponential backoff on 429 (rate limit)
+        max_retries = 4
+        base_delay = 2.0
+        last_exc = None
+        
+        client = await self._get_client()
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.post(
+                    f"{endpoint}?key={api_key}",
+                    headers={"Content-Type": "application/json"},
+                    json=request_body,
+                )
+                
+                if response.status_code == 429:
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                    response.raise_for_status()
+                
+                response.raise_for_status()
+                break
+                
+            except httpx.HTTPStatusError as e:
+                last_exc = e
+                if e.response.status_code == 429 and attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        else:
+            raise last_exc
+        
         data = response.json()
         
         # Extract text from response
@@ -379,6 +408,60 @@ class LLMRunner:
             cost_usd=0.0,
         )
     
+    async def complete_with_fallback(
+        self,
+        prompt: str,
+        fallback_models: list[str],
+        model: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0,
+        max_tokens: int = 1000,
+    ) -> CompletionResult:
+        """Run a completion with automatic model fallback.
+        
+        Tries the primary model first. If it fails (rate limit, error),
+        tries each fallback model in order until one succeeds.
+        Works with both OpenRouter and Google models.
+        
+        Args:
+            prompt: The user prompt
+            fallback_models: Ordered list of fallback model IDs to try
+            model: Primary model identifier
+            system_prompt: Optional system prompt
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            CompletionResult from whichever model succeeded
+        """
+        primary = model or self.default_model
+        all_models = [primary] + [m for m in fallback_models if m != primary]
+        
+        last_error = None
+        for candidate in all_models:
+            try:
+                result = await self.complete(
+                    prompt=prompt,
+                    model=candidate,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return result
+            except Exception as e:
+                last_error = e
+                error_msg = str(e).lower()
+                is_rate_limit = any(ind in error_msg for ind in [
+                    "429", "rate limit", "rate_limit", "too many requests",
+                    "quota", "resource_exhausted", "exhausted",
+                ])
+                if is_rate_limit:
+                    continue  # Try next model immediately
+                # For non-rate-limit errors, also try next model
+                continue
+        
+        raise last_error
+
     async def check_health(self, model: Optional[str] = None) -> bool:
         """Check if the model is available."""
         model = model or self.default_model

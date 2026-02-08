@@ -28,6 +28,7 @@ from promptlab.llm_council.llm_runner.runner import LLMRunner
 from promptlab.llm_council.council.council import Council
 from promptlab.orchestrators.parser import parse_test_file, discover_test_files
 from promptlab.orchestrators.models import TestCase, TestSuite
+from promptlab.utils.model_pool import ModelPool
 
 console = Console()
 
@@ -176,6 +177,17 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         
         # Initialize council if enabled
         if config.council.enabled:
+            # Extract API keys for dynamic model pool
+            openrouter_key = None
+            or_provider = config.models.providers.get("openrouter")
+            if or_provider and or_provider.api_key:
+                openrouter_key = or_provider.api_key
+            
+            google_key = None
+            google_provider = config.models.providers.get("google")
+            if google_provider and google_provider.api_key:
+                google_key = google_provider.api_key
+            
             self.council = Council(
                 {
                     "members": config.council.members,
@@ -183,9 +195,18 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                     "mode": config.council.mode,
                 },
                 self.llm_runner,
+                openrouter_api_key=openrouter_key,
+                google_api_key=google_key,
+            )
+            
+            # Model pool for response generation fallback (same pool as council)
+            self.model_pool = ModelPool(
+                openrouter_api_key=openrouter_key or "",
+                google_api_key=google_key or "",
             )
         else:
             self.council = None
+            self.model_pool = None
         
         # Load BSP
         self.bsp = load_bsp(config, project_root)
@@ -267,7 +288,11 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         )
     
     async def _run_single_test(self, case: TestCase, suite: TestSuite) -> TestOutput:
-        """Run a single test case with BSP prepended."""
+        """Run a single test case with BSP prepended.
+        
+        Uses model fallback: if the primary model fails (rate limit, error),
+        automatically tries other models from the pool.
+        """
         # Build full prompt with BSP
         full_prompt = case.prompt
         
@@ -281,8 +306,12 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         temperature = case.temperature if case.temperature is not None else (suite.defaults.temperature if suite.defaults else 0)
         
         try:
-            completion = await self.llm_runner.complete(
+            # Build fallback model list from pool
+            fallback_models = await self._get_fallback_models()
+            
+            completion = await self.llm_runner.complete_with_fallback(
                 prompt=full_prompt,
+                fallback_models=fallback_models,
                 model=model,
                 system_prompt=system_prompt,
                 temperature=temperature,
@@ -307,6 +336,22 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                 response=f"ERROR: {str(e)}",
                 expected=case.expected,
             )
+    
+    async def _get_fallback_models(self) -> list[str]:
+        """Get fallback model list from the model pool.
+        
+        Initializes the pool on first call. Returns pool models sorted by
+        capability (param count). Used for response generation fallback.
+        """
+        if not self.model_pool:
+            return []
+        
+        if not self.model_pool.initialized:
+            await self.model_pool.initialize()
+        
+        if self.model_pool.initialized:
+            return self.model_pool.get_available_judges(preferred=[self.config.models.default])
+        return []
     
     def save_outputs(self, batch: BatchOutput, output_dir: Optional[Path] = None) -> Path:
         """Save batch outputs to JSON file.
@@ -387,7 +432,10 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         )
     
     async def _evaluate_with_single_llm(self, batch: BatchOutput) -> CouncilBatchResult:
-        """Fallback evaluation with single LLM if council is disabled."""
+        """Fallback evaluation with single LLM if council is disabled.
+        
+        Uses model fallback to try alternative models if primary fails.
+        """
         outputs_text = self._format_outputs_for_evaluation(batch.outputs[:20])
         
         eval_prompt = self.BATCH_EVALUATION_PROMPT.format(
@@ -395,8 +443,10 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             outputs=outputs_text,
         )
         
-        result = await self.llm_runner.complete(
+        fallback_models = await self._get_fallback_models()
+        result = await self.llm_runner.complete_with_fallback(
             prompt=eval_prompt,
+            fallback_models=fallback_models,
             model=self.config.models.default,
             temperature=0,
         )

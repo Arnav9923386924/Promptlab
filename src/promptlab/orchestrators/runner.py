@@ -17,6 +17,7 @@ from promptlab.orchestrators.assertions import run_all_assertions
 from promptlab.llm_council.llm_runner.runner import LLMRunner
 from promptlab.llm_council.council.council import Council
 from promptlab.utils.config import PromptLabConfig
+from promptlab.utils.model_pool import ModelPool
 
 
 console = Console()
@@ -41,6 +42,17 @@ class TestRunner:
         })
         
         if config.council.enabled:
+            # Extract API keys for dynamic model pool
+            openrouter_key = None
+            or_provider = config.models.providers.get("openrouter")
+            if or_provider and or_provider.api_key:
+                openrouter_key = or_provider.api_key
+            
+            google_key = None
+            google_provider = config.models.providers.get("google")
+            if google_provider and google_provider.api_key:
+                google_key = google_provider.api_key
+            
             self.council = Council(
                 {
                     "members": config.council.members,
@@ -48,9 +60,18 @@ class TestRunner:
                     "mode": config.council.mode,
                 },
                 self.llm_runner,
+                openrouter_api_key=openrouter_key,
+                google_api_key=google_key,
+            )
+            
+            # Model pool for response generation fallback
+            self.model_pool = ModelPool(
+                openrouter_api_key=openrouter_key or "",
+                google_api_key=google_key or "",
             )
         else:
             self.council = None
+            self.model_pool = None
     
     async def run_test_file(self, path: Path, semaphore: asyncio.Semaphore = None) -> list[TestResult]:
         """Run all tests in a file.
@@ -77,6 +98,9 @@ class TestRunner:
     async def run_test_case(self, case: TestCase, suite: TestSuite) -> TestResult:
         """Run a single test case.
         
+        Uses model fallback: if the primary model fails (rate limit, error),
+        automatically tries other models from the pool.
+        
         Args:
             case: Test case to run
             suite: Parent test suite (for defaults)
@@ -92,9 +116,13 @@ class TestRunner:
         system_prompt = suite.defaults.system_prompt if suite.defaults else None
         
         try:
-            # Run LLM completion
-            completion = await self.llm_runner.complete(
+            # Build fallback model list from pool
+            fallback_models = await self._get_fallback_models()
+            
+            # Run LLM completion with fallback
+            completion = await self.llm_runner.complete_with_fallback(
                 prompt=case.prompt,
+                fallback_models=fallback_models,
                 model=model,
                 system_prompt=system_prompt,
                 temperature=temperature,
@@ -153,6 +181,22 @@ class TestRunner:
                 latency_ms=int((time.time() - start_time) * 1000),
             )
     
+    async def _get_fallback_models(self) -> list[str]:
+        """Get fallback model list from the model pool.
+        
+        Initializes the pool on first call. Returns pool models sorted by
+        capability (param count). Used for response generation fallback.
+        """
+        if not self.model_pool:
+            return []
+        
+        if not self.model_pool.initialized:
+            await self.model_pool.initialize()
+        
+        if self.model_pool.initialized:
+            return self.model_pool.get_available_judges(preferred=[self.config.models.default])
+        return []
+
     async def run_all(
         self,
         test_dir: Path,

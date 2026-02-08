@@ -83,6 +83,36 @@ class ScraperConfig(BaseModel):
     timeout: int = 30
 
 
+class GuardrailConfig(BaseModel):
+    """Guardrail testing configuration."""
+    enabled: bool = False
+    categories: list[str] = ["prompt_injection", "jailbreak", "system_prompt_extraction", "role_breaking", "data_exfiltration"]
+    evaluator_model: Optional[str] = None  # Model for ambiguous evaluations
+    rate_limit_delay: float = 3.0
+
+
+class OptimizerConfig(BaseModel):
+    """BSP optimizer configuration."""
+    max_iterations: int = 3
+    target_lint_score: float = 0.90
+    plateau_threshold: float = 0.02
+    optimizer_model: Optional[str] = None
+
+
+class MultiTurnConfig(BaseModel):
+    """Multi-turn evaluation configuration."""
+    num_turns: int = 6
+    rate_limit_delay: float = 3.0
+    evaluator_model: Optional[str] = None
+
+
+class TrainingDataConfig(BaseModel):
+    """Training data generation configuration."""
+    min_quality_score: float = 0.7
+    output_format: str = "openai"  # openai, alpaca, sharegpt
+    output_dir: str = ".promptlab/training_data"
+
+
 class PromptLabConfig(BaseModel):
     """Complete PromptLab configuration."""
     version: int = 1
@@ -93,6 +123,10 @@ class PromptLabConfig(BaseModel):
     baseline: BaselineConfig = BaselineConfig()
     git: GitConfig = GitConfig()
     scraper: ScraperConfig = ScraperConfig()
+    guardrail: GuardrailConfig = GuardrailConfig()
+    optimizer: OptimizerConfig = OptimizerConfig()
+    multi_turn: MultiTurnConfig = MultiTurnConfig()
+    training_data: TrainingDataConfig = TrainingDataConfig()
 
 
 def load_config(path: Optional[Path] = None) -> PromptLabConfig:

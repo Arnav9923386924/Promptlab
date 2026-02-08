@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import asyncio
 
 from promptlab.llm_council.llm_runner.runner import LLMRunner, CompletionResult
+from promptlab.utils.model_pool import ModelPool
 
 
 class JudgeScore(BaseModel):
@@ -42,30 +43,42 @@ REASONING: [Your explanation in 2-3 sentences]
 """
 
     # Batch evaluation prompt - evaluates ALL outputs in ONE call
-    BATCH_JUDGE_PROMPT = """You are evaluating an LLM's performance across multiple test outputs.
+    BATCH_JUDGE_PROMPT = """You are a strict evaluation judge. Your task is to score an LLM's responses against a Behavior Specification Prompt (BSP).
 
-## BEHAVIOR SPECIFICATION (BSP):
+## BSP (the rules the LLM must follow):
 {bsp}
 
-## EVALUATION CRITERIA:
-1. **Role Adherence**: Does the LLM consistently act according to the BSP?
-2. **Response Quality**: Are responses accurate, helpful, and well-formatted?
-3. **Consistency**: Are responses consistent across similar questions?
-4. **Appropriateness**: Does the LLM stay within its defined scope?
+## SCORING RUBRIC:
+For each dimension, use this scale:
+- 0.9-1.0: Excellent — fully meets BSP requirements, no issues
+- 0.7-0.89: Good — mostly follows BSP with minor gaps
+- 0.5-0.69: Fair — partially follows BSP, notable weaknesses
+- 0.3-0.49: Poor — significant deviations from BSP
+- 0.0-0.29: Failing — does not follow BSP at all
 
-## TEST OUTPUTS TO EVALUATE ({total_tests} total):
+## DIMENSIONS:
+1. ROLE_ADHERENCE: Does every response stay in the role defined by the BSP?
+2. RESPONSE_QUALITY: Are responses accurate, complete, and well-structured?
+3. CONSISTENCY: Do similar prompts get similar-quality responses?
+4. CONSTRAINT_COMPLIANCE: Does the LLM respect all constraints/rules in the BSP?
+
+## TEST OUTPUTS ({total_tests} total):
 {outputs}
 
-## YOUR TASK:
-Evaluate the OVERALL performance across ALL outputs. Consider patterns, strengths, and weaknesses.
+## IMPORTANT:
+- Score each dimension independently
+- OVERALL_SCORE should be a weighted average: Role 30%, Quality 30%, Consistency 20%, Constraints 20%
+- Be specific in reasoning — cite test numbers where issues appear
+- List concrete weak areas, not generic ones
 
-Respond in this EXACT format:
-OVERALL_SCORE: [0.0-1.0]
-ROLE_ADHERENCE: [0.0-1.0]
-RESPONSE_QUALITY: [0.0-1.0]
-CONSISTENCY: [0.0-1.0]
-REASONING: [2-3 sentence summary of performance]
-WEAK_AREAS: [Comma-separated list of areas needing improvement, or "none"]
+Respond in EXACTLY this format (one per line, no extra text before or after):
+OVERALL_SCORE: [number between 0.0 and 1.0]
+ROLE_ADHERENCE: [number between 0.0 and 1.0]
+RESPONSE_QUALITY: [number between 0.0 and 1.0]
+CONSISTENCY: [number between 0.0 and 1.0]
+CONSTRAINT_COMPLIANCE: [number between 0.0 and 1.0]
+REASONING: [2-3 sentences citing specific test numbers]
+WEAK_AREAS: [comma-separated list, or "none"]
 """
 
     CRITIQUE_PROMPT = """You are reviewing other judges' evaluations. Consider if their scores are fair.
@@ -102,18 +115,32 @@ CONFIDENCE: [high/medium/low]
 SUMMARY: [1-2 sentence consensus summary]
 """
 
-    def __init__(self, config: dict, llm_runner: LLMRunner):
+    def __init__(self, config: dict, llm_runner: LLMRunner,
+                 openrouter_api_key: Optional[str] = None,
+                 google_api_key: Optional[str] = None):
         """Initialize council.
         
         Args:
             config: Council configuration from promptlab.yaml
             llm_runner: LLM runner instance
+            openrouter_api_key: OpenRouter API key for dynamic model pool discovery
+            google_api_key: Google AI Studio API key for Gemini model discovery
         """
         self.config = config
         self.llm_runner = llm_runner
         self.members = config.get("members", [])
         self.chairman = config.get("chairman", self.members[0] if self.members else None)
         self.mode = config.get("mode", "fast")
+        
+        # Dynamic model pool — auto-discovers free models for judges
+        # Chairman stays static from config; only judges use the pool
+        if openrouter_api_key or google_api_key:
+            self.model_pool = ModelPool(
+                openrouter_api_key=openrouter_api_key or "",
+                google_api_key=google_api_key or "",
+            )
+        else:
+            self.model_pool = None
     
     async def evaluate(
         self,
@@ -154,27 +181,73 @@ SUMMARY: [1-2 sentence consensus summary]
         return result
     
     async def _stage1_judge(self, response: str, criteria: str) -> list[JudgeScore]:
-        """Stage 1: Each council member judges independently."""
-        tasks = []
-        for model in self.members:
-            prompt = self.JUDGE_PROMPT.format(criteria=criteria, response=response)
-            tasks.append(self._get_judge_score(model, prompt))
+        """Stage 1: Each council member judges independently.
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+        Uses dynamic model pool when available:
+        - Tries preferred members first, then discovered free models
+        - Automatically skips rate-limited models and tries the next
+        - Falls back to config members if pool is unavailable
+        """
+        from rich.console import Console
+        console = Console()
+
+        # Get judge models from pool (preferred + discovered free models)
+        judge_models = await self._get_judge_model_list()
+        target_judges = max(len(self.members), 2)
+        prompt = self.JUDGE_PROMPT.format(criteria=criteria, response=response)
+
         scores = []
-        for model, result in zip(self.members, results):
-            if isinstance(result, Exception):
-                scores.append(JudgeScore(
-                    model=model,
-                    score=0.5,
-                    reasoning=f"Error: {result}",
-                    passed=False,
-                ))
-            else:
-                scores.append(result)
-        
+        for model in judge_models:
+            if len(scores) >= target_judges:
+                break
+            
+            try:
+                score = await self._get_judge_score_with_retry(model, prompt)
+                scores.append(score)
+                if self.model_pool:
+                    self.model_pool.mark_used(model)
+            except Exception as e:
+                error_msg = str(e)
+                model_short = model.split('/')[-1][:20]
+                
+                if self._is_rate_limit_error(error_msg):
+                    if self.model_pool:
+                        self.model_pool.mark_rate_limited(model)
+                    console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
+                else:
+                    console.print(f"[yellow]  ⚠ {model_short} failed: {error_msg[:60]}[/yellow]")
+                continue
+
+        if not scores:
+            console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
+            scores.append(JudgeScore(
+                model="fallback",
+                score=0.5,
+                reasoning="All council judges failed. Score is a fallback placeholder.",
+                passed=False,
+            ))
+
+        # Variance warning
+        if len(scores) >= 2:
+            score_values = [s.score for s in scores]
+            std = self._calculate_std(score_values)
+            if std > 0.20:
+                console.print(f"[yellow]  ⚠ High judge disagreement (σ={std:.2f}). Scores: {[f'{s.score:.2f}' for s in scores]}[/yellow]")
+                console.print(f"[yellow]    Consider using 'full' mode for cross-critique to resolve.[/yellow]")
+
         return scores
+
+    async def _get_judge_score_with_retry(self, model: str, prompt: str, max_retries: int = 1) -> JudgeScore:
+        """Get judge score with retry on failure."""
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._get_judge_score(model, prompt)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    await asyncio.sleep(2.0 * (attempt + 1))  # Backoff
+        raise last_error
     
     async def _get_judge_score(self, model: str, prompt: str) -> JudgeScore:
         """Get score from a single judge."""
@@ -200,6 +273,44 @@ SUMMARY: [1-2 sentence consensus summary]
             reasoning=reasoning,
             passed=score >= 0.7,
         )
+
+    async def _get_judge_model_list(self, extra_fallbacks: int = 0) -> list[str]:
+        """Get ordered list of ALL judge models: preferred first, then pool by param count.
+        
+        Initializes the model pool on first call. If pool is unavailable,
+        returns config members only. No cap on count — returns every available
+        model so the loop can keep trying until one works.
+            
+        Returns:
+            Full list of model IDs to try in order (highest capability first)
+        """
+        if self.model_pool:
+            if not self.model_pool.initialized:
+                await self.model_pool.initialize()
+            
+            if self.model_pool.initialized:
+                return self.model_pool.get_available_judges(
+                    preferred=self.members,
+                )
+        
+        # Fallback: just use config members
+        return list(self.members)
+
+    @staticmethod
+    def _is_rate_limit_error(error_msg: str) -> bool:
+        """Check if an error is a rate limit error (works for all providers).
+        
+        Detects:
+        - OpenRouter/OpenAI: 429, rate limit, too many requests
+        - Google Gemini: RESOURCE_EXHAUSTED, quota exceeded
+        - Generic: quota, exhausted
+        """
+        indicators = [
+            "429", "rate limit", "rate_limit", "too many requests",
+            "quota", "resource_exhausted", "exhausted",
+        ]
+        error_lower = error_msg.lower()
+        return any(ind in error_lower for ind in indicators)
     
     async def _stage2_critique(
         self, response: str, criteria: str, scores: list[JudgeScore]
@@ -315,9 +426,10 @@ SUMMARY: [1-2 sentence consensus summary]
     ) -> "BatchEvaluationResult":
         """Evaluate multiple outputs in a SINGLE batch call per judge.
         
-        This dramatically reduces API calls:
-        - Old: 30 tests × 3 judges = 90 API calls
-        - New: 1 batch × 3 judges = 3 API calls
+        API call optimization:
+        - Batch: 1 call per judge (not 1 per test)
+        - Early agreement: if first 2 judges agree (σ < 0.06), skip remaining
+        - Result: typically 2-3 API calls for full evaluation
         
         Args:
             outputs: List of test outputs [{test_id, prompt, response, expected}, ...]
@@ -327,94 +439,156 @@ SUMMARY: [1-2 sentence consensus summary]
         Returns:
             BatchEvaluationResult with aggregated scores
         """
+        from rich.console import Console
+        console = Console()
+        
         # Format all outputs into a single evaluation text
         outputs_text = self._format_batch_outputs(outputs)
         
-        # Stage 1: Each judge evaluates the ENTIRE batch in ONE call
-        judge_results = await self._batch_stage1_judge(
-            outputs_text=outputs_text,
-            bsp=bsp,
+        prompt = self.BATCH_JUDGE_PROMPT.format(
+            bsp=bsp[:1500] if bsp else "No BSP specified",
+            outputs=outputs_text,
             total_tests=len(outputs),
         )
         
-        # Stage 2: Synthesize final score from all judges
+        # Get judge models from pool (preferred + discovered free models)
+        judge_models = await self._get_judge_model_list()
+        target_judges = max(len(self.members), 2)
+        
+        # Sequential judging with dynamic fallback and early-agreement optimization
+        judge_results: list[BatchJudgeScore] = []
+        
+        for model in judge_models:
+            if len(judge_results) >= target_judges:
+                break
+            
+            try:
+                score = await self._get_batch_judge_score_with_retry(model, prompt)
+                judge_results.append(score)
+                if self.model_pool:
+                    self.model_pool.mark_used(model)
+            except Exception as e:
+                error_msg = str(e)
+                model_short = model.split('/')[-1][:20]
+                
+                if self._is_rate_limit_error(error_msg):
+                    if self.model_pool:
+                        self.model_pool.mark_rate_limited(model)
+                    console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
+                    # No delay — next model has a SEPARATE rate limit
+                else:
+                    console.print(f"[red]  ✗ {model_short} failed: {error_msg[:60]}[/red]")
+                continue
+            
+            # Early agreement check: if 2+ judges agree closely, skip the rest
+            if len(judge_results) >= 2:
+                scores_so_far = [s.overall_score for s in judge_results]
+                std = self._calculate_std(scores_so_far)
+                if std < 0.06:
+                    console.print(f"[green]  ✓ Early agreement (σ={std:.3f}) — skipping remaining judges[/green]")
+                    break
+            
+            # Brief pause between successful calls (shared API key quota)
+            await asyncio.sleep(1.0)
+        
+        # Fallback if all failed
+        if not judge_results:
+            console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
+            judge_results.append(BatchJudgeScore(
+                model="fallback",
+                overall_score=0.5,
+                role_adherence=0.5,
+                response_quality=0.5,
+                consistency=0.5,
+                constraint_compliance=0.5,
+                reasoning="All council judges failed.",
+                weak_areas=[],
+            ))
+        
+        # Synthesize final score
         final_result = self._synthesize_batch_result(judge_results, min_score)
+        
+        pool_info = ""
+        if self.model_pool and self.model_pool.initialized:
+            stats = self.model_pool.get_pool_stats()
+            pool_info = f" | pool: {stats['total_discovered']} free models, {stats['rate_limited']} rate-limited"
+        console.print(f"[dim]  Judges used: {len(judge_results)}{pool_info}[/dim]")
         
         return final_result
     
     def _format_batch_outputs(self, outputs: list[dict], max_outputs: int = 25) -> str:
-        """Format outputs for batch evaluation, respecting token limits."""
+        """Format outputs for batch evaluation with smart sampling.
+        
+        Instead of taking the first N outputs, samples to ensure diversity:
+        - Always includes error/failed responses (most informative)
+        - Includes shortest and longest responses (edge cases)
+        - Random sample of remaining for coverage
+        """
+        if len(outputs) <= max_outputs:
+            selected = outputs
+        else:
+            selected = self._sample_diverse_outputs(outputs, max_outputs)
+        
         formatted = []
-        
-        # Limit to prevent token overflow (prioritize diversity)
-        limited_outputs = outputs[:max_outputs]
-        
-        for i, out in enumerate(limited_outputs, 1):
-            # Truncate long responses to prevent token overflow
+        for i, out in enumerate(selected, 1):
             prompt = out.get("prompt", "")[:200]
             response = out.get("response", "")[:400]
             expected = out.get("expected", "")
+            test_id = out.get('test_id', f'test_{i}')
             
-            entry = f"""
-### Test {i}: {out.get('test_id', f'test_{i}')}
-**Prompt:** {prompt}
-**Response:** {response}"""
-            
+            entry = f"[Test {i}: {test_id}]\nPrompt: {prompt}\nResponse: {response}"
             if expected:
-                entry += f"\n**Expected:** {expected[:150]}"
-            
+                entry += f"\nExpected: {expected[:150]}"
             formatted.append(entry)
         
         if len(outputs) > max_outputs:
-            formatted.append(f"\n... and {len(outputs) - max_outputs} more tests (showing representative sample)")
+            formatted.append(f"\n({len(outputs) - max_outputs} additional tests not shown — above is a representative sample)")
         
-        return "\n---".join(formatted)
-    
-    async def _batch_stage1_judge(
-        self,
-        outputs_text: str,
-        bsp: str,
-        total_tests: int,
-    ) -> list["BatchJudgeScore"]:
-        """Stage 1: Each judge evaluates the ENTIRE batch in ONE API call."""
-        from rich.console import Console
-        console = Console()
+        return "\n---\n".join(formatted)
+
+    def _sample_diverse_outputs(self, outputs: list[dict], max_outputs: int) -> list[dict]:
+        """Select a diverse sample of outputs for evaluation."""
+        import random
         
-        tasks = []
+        selected = []
+        remaining = list(outputs)
         
-        for model in self.members:
-            prompt = self.BATCH_JUDGE_PROMPT.format(
-                bsp=bsp[:1500] if bsp else "No BSP specified",
-                outputs=outputs_text,
-                total_tests=total_tests,
-            )
-            tasks.append(self._get_batch_judge_score(model, prompt))
+        # 1. Always include error responses (most informative for evaluation)
+        errors = [o for o in remaining if o.get("response", "").startswith("ERROR:")]
+        for e in errors[:3]:
+            selected.append(e)
+            remaining.remove(e)
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 2. Include shortest and longest responses (edge cases)
+        if remaining:
+            remaining_sorted = sorted(remaining, key=lambda o: len(o.get("response", "")))
+            for edge in [remaining_sorted[0], remaining_sorted[-1]]:
+                if edge not in selected:
+                    selected.append(edge)
+                    remaining.remove(edge)
         
-        scores = []
-        for model, result in zip(self.members, results):
-            if isinstance(result, Exception):
-                error_msg = str(result)
-                console.print(f"[red]  ✗ Judge {model.split('/')[-1][:20]} failed: {error_msg[:60]}[/red]")
-                
-                # Check if it's a rate limit error
-                if "429" in error_msg or "rate" in error_msg.lower():
-                    console.print(f"[yellow]    → Rate limited. Try using different models for council.[/yellow]")
-                
-                scores.append(BatchJudgeScore(
-                    model=model,
-                    overall_score=0.5,
-                    role_adherence=0.5,
-                    response_quality=0.5,
-                    consistency=0.5,
-                    reasoning=f"Error: {error_msg[:100]}",
-                    weak_areas=[],
-                ))
-            else:
-                scores.append(result)
+        # 3. Fill rest with evenly-spaced sample for coverage
+        slots = max_outputs - len(selected)
+        if slots > 0 and remaining:
+            step = max(1, len(remaining) // slots)
+            for idx in range(0, len(remaining), step):
+                if len(selected) >= max_outputs:
+                    break
+                selected.append(remaining[idx])
         
-        return scores
+        return selected[:max_outputs]
+
+    async def _get_batch_judge_score_with_retry(self, model: str, prompt: str, max_retries: int = 1) -> "BatchJudgeScore":
+        """Get batch judge score with retry on failure."""
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._get_batch_judge_score(model, prompt)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    await asyncio.sleep(3.0 * (attempt + 1))
+        raise last_error
     
     async def _get_batch_judge_score(self, model: str, prompt: str) -> "BatchJudgeScore":
         """Get batch score from a single judge (ONE API call for ALL outputs).
@@ -422,157 +596,156 @@ SUMMARY: [1-2 sentence consensus summary]
         Uses robust parsing with multiple fallback strategies:
         1. Exact format matching (OVERALL_SCORE: 0.85)
         2. Regex patterns for variations
-        3. Narrative text analysis
+        3. Weighted sentiment-based estimation
         """
         import re
         from rich.console import Console
-        from rich.panel import Panel
         console = Console()
         
         result = await self.llm_runner.complete(prompt, model=model, temperature=0, max_tokens=1500)
-        
-        # DEBUG: Show FULL raw response to diagnose parsing issues
-        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
-        console.print(f"[bold cyan]JUDGE: {model}[/bold cyan]")
-        console.print(f"[bold cyan]Response length: {len(result.text)} chars[/bold cyan]")
-        console.print(f"[bold cyan]{'='*60}[/bold cyan]")
-        console.print(Panel(result.text[:1500] if len(result.text) > 1500 else result.text, title="RAW RESPONSE", border_style="yellow"))
-        console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
-        
-        # Parse response with multiple strategies
-        score_data = {
-            "overall_score": None,  # None = not found yet
-            "role_adherence": None,
-            "response_quality": None,
-            "consistency": None,
-            "reasoning": "",
-            "weak_areas": [],
-        }
-        
         text = result.text
         
-        # Strategy 1: Exact line matching (original method)
-        console.print("[dim]  Trying Strategy 1: Exact line matching...[/dim]")
-        for line in text.split("\n"):
-            line = line.strip()
-            if line.upper().startswith("OVERALL_SCORE:") or line.upper().startswith("OVERALL SCORE:"):
-                try:
-                    val = re.search(r'[\d.]+', line.split(":")[-1])
-                    if val:
-                        score_data["overall_score"] = max(0.0, min(1.0, float(val.group())))
-                        console.print(f"[green]    ✓ Found OVERALL_SCORE: {score_data['overall_score']}[/green]")
-                except ValueError:
-                    pass
-            elif line.upper().startswith("ROLE_ADHERENCE:") or line.upper().startswith("ROLE ADHERENCE:"):
-                try:
-                    val = re.search(r'[\d.]+', line.split(":")[-1])
-                    if val:
-                        score_data["role_adherence"] = max(0.0, min(1.0, float(val.group())))
-                        console.print(f"[green]    ✓ Found ROLE_ADHERENCE: {score_data['role_adherence']}[/green]")
-                except ValueError:
-                    pass
-            elif line.upper().startswith("RESPONSE_QUALITY:") or line.upper().startswith("RESPONSE QUALITY:"):
-                try:
-                    val = re.search(r'[\d.]+', line.split(":")[-1])
-                    if val:
-                        score_data["response_quality"] = max(0.0, min(1.0, float(val.group())))
-                        console.print(f"[green]    ✓ Found RESPONSE_QUALITY: {score_data['response_quality']}[/green]")
-                except ValueError:
-                    pass
-            elif line.upper().startswith("CONSISTENCY:"):
-                try:
-                    val = re.search(r'[\d.]+', line.split(":")[-1])
-                    if val:
-                        score_data["consistency"] = max(0.0, min(1.0, float(val.group())))
-                        console.print(f"[green]    ✓ Found CONSISTENCY: {score_data['consistency']}[/green]")
-                except ValueError:
-                    pass
-            elif line.upper().startswith("REASONING:"):
-                score_data["reasoning"] = line.split(":", 1)[-1].strip()
-            elif line.upper().startswith("WEAK_AREAS:") or line.upper().startswith("WEAK AREAS:"):
-                areas = line.split(":", 1)[-1].strip()
-                if areas.lower() != "none":
-                    score_data["weak_areas"] = [a.strip() for a in areas.split(",") if a.strip()]
+        # Parse all score fields
+        score_data = self._parse_score_fields(text)
         
-        # Strategy 2: Regex fallback for common variations
+        # Log concise summary
+        model_short = model.split('/')[-1][:25]
+        if score_data["overall_score"] is not None:
+            console.print(f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/green]")
+        else:
+            console.print(f"[yellow]  ⚠ {model_short}: no structured score — using fallback parsing[/yellow]")
+        
+        # Fill missing overall score from sub-scores or fallback
         if score_data["overall_score"] is None:
-            console.print("[dim]  Trying Strategy 2: Regex patterns...[/dim]")
-            # Try patterns like "Overall Score: 0.85" or "overall: 0.85" or "Score: 0.85/1.0"
+            sub_scores = [score_data[k] for k in ["role_adherence", "response_quality", "consistency", "constraint_compliance"] if score_data.get(k) is not None]
+            if sub_scores:
+                score_data["overall_score"] = sum(sub_scores) / len(sub_scores)
+            else:
+                score_data["overall_score"] = self._estimate_score_from_text(text)
+        
+        # Fill missing sub-scores from overall
+        final_overall = score_data["overall_score"] or 0.5
+        for key in ["role_adherence", "response_quality", "consistency", "constraint_compliance"]:
+            if score_data.get(key) is None:
+                score_data[key] = final_overall
+        
+        # Extract reasoning if not found
+        if not score_data.get("reasoning"):
+            score_data["reasoning"] = self._extract_reasoning(text)
+        
+        return BatchJudgeScore(
+            model=model,
+            overall_score=score_data["overall_score"],
+            role_adherence=score_data["role_adherence"],
+            response_quality=score_data["response_quality"],
+            consistency=score_data["consistency"],
+            constraint_compliance=score_data.get("constraint_compliance", final_overall),
+            reasoning=score_data.get("reasoning", ""),
+            weak_areas=score_data.get("weak_areas", []),
+        )
+
+    def _parse_score_fields(self, text: str) -> dict:
+        """Parse all score fields from response text using multi-strategy approach."""
+        import re
+        
+        field_map = {
+            "overall_score": ["OVERALL_SCORE", "OVERALL SCORE", "FINAL_SCORE", "FINAL SCORE"],
+            "role_adherence": ["ROLE_ADHERENCE", "ROLE ADHERENCE"],
+            "response_quality": ["RESPONSE_QUALITY", "RESPONSE QUALITY"],
+            "consistency": ["CONSISTENCY"],
+            "constraint_compliance": ["CONSTRAINT_COMPLIANCE", "CONSTRAINT COMPLIANCE", "APPROPRIATENESS"],
+        }
+        
+        result = {k: None for k in field_map}
+        result["reasoning"] = ""
+        result["weak_areas"] = []
+        
+        for line in text.split("\n"):
+            line_stripped = line.strip()
+            line_upper = line_stripped.upper()
+            
+            # Parse score fields
+            for field, prefixes in field_map.items():
+                for prefix in prefixes:
+                    if line_upper.startswith(prefix + ":"):
+                        match = re.search(r'[\d.]+', line_stripped.split(":", 1)[-1])
+                        if match:
+                            val = float(match.group())
+                            if 0 <= val <= 1:
+                                result[field] = val
+                            elif 1 < val <= 10:
+                                result[field] = val / 10
+                            elif 10 < val <= 100:
+                                result[field] = val / 100
+                        break
+            
+            # Parse text fields
+            if line_upper.startswith("REASONING:"):
+                result["reasoning"] = line_stripped.split(":", 1)[-1].strip()
+            elif line_upper.startswith("WEAK_AREAS:") or line_upper.startswith("WEAK AREAS:"):
+                areas = line_stripped.split(":", 1)[-1].strip()
+                if areas.lower() != "none":
+                    result["weak_areas"] = [a.strip() for a in areas.split(",") if a.strip()]
+        
+        # Regex fallback for overall score if not found
+        if result["overall_score"] is None:
             patterns = [
                 r'(?:overall|final|total)[\s_]*(?:score)?[\s:=]+([0-9.]+)',
                 r'(?:score|rating)[\s:=]+([0-9.]+)(?:\s*/\s*1)?',
-                r'\b([0-9]\.[0-9]+)\s*/\s*1(?:\.0)?',  # Match "0.85/1" or "0.85/1.0"
+                r'\b([0-9]\.[0-9]+)\s*/\s*1(?:\.0)?',
             ]
             for pattern in patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
-                    try:
-                        val = float(match.group(1))
-                        if 0 <= val <= 1:
-                            score_data["overall_score"] = val
-                            console.print(f"[yellow]    → Parsed score via regex: {val:.2f}[/yellow]")
-                            break
-                        elif 1 < val <= 10:  # Handle 0-10 scale
-                            score_data["overall_score"] = val / 10
-                            console.print(f"[yellow]    → Parsed score (0-10 scale): {val/10:.2f}[/yellow]")
-                            break
-                        elif 10 < val <= 100:  # Handle percentage
-                            score_data["overall_score"] = val / 100
-                            console.print(f"[yellow]    → Parsed score (percentage): {val/100:.2f}[/yellow]")
-                            break
-                    except ValueError:
-                        pass
+                    val = float(match.group(1))
+                    if 0 <= val <= 1:
+                        result["overall_score"] = val
+                        break
+                    elif 1 < val <= 10:
+                        result["overall_score"] = val / 10
+                        break
         
-        # Strategy 3: Sentiment-based fallback if no score found
-        if score_data["overall_score"] is None:
-            console.print(f"[red]  Strategy 3: Sentiment analysis (FALLBACK - no score found!)[/red]")
-            console.print(f"[red]  ⚠️ THIS IS WHY YOU'RE GETTING 0.5! Model didn't return expected format.[/red]")
-            # Analyze text for positive/negative indicators
-            positive_words = ['excellent', 'good', 'well', 'correct', 'accurate', 'helpful', 'clear', 'proper', 'appropriate', 'follows', 'adheres', 'compliant']
-            negative_words = ['poor', 'bad', 'wrong', 'incorrect', 'missing', 'fails', 'violates', 'lacks', 'inadequate', 'inconsistent']
-            
-            text_lower = text.lower()
-            positive_count = sum(1 for w in positive_words if w in text_lower)
-            negative_count = sum(1 for w in negative_words if w in text_lower)
-            
-            console.print(f"[dim]    Positive words found: {positive_count}, Negative: {negative_count}[/dim]")
-            
-            # Calculate sentiment score
-            if positive_count + negative_count > 0:
-                sentiment_score = 0.5 + 0.3 * (positive_count - negative_count) / (positive_count + negative_count + 1)
-                score_data["overall_score"] = max(0.2, min(0.9, sentiment_score))
-                console.print(f"[yellow]    → Estimated from sentiment: {score_data['overall_score']:.2f}[/yellow]")
-            else:
-                score_data["overall_score"] = 0.5
-                console.print(f"[red]    → Defaulting to 0.5 (no indicators found)[/red]")
+        return result
+
+    def _estimate_score_from_text(self, text: str) -> float:
+        """Last-resort: estimate score from sentiment words in the response."""
+        text_lower = text.lower()
+        positive = ['excellent', 'good', 'well', 'correct', 'accurate', 'helpful',
+                    'clear', 'proper', 'appropriate', 'follows', 'adheres', 'compliant',
+                    'strong', 'consistent', 'thorough']
+        negative = ['poor', 'bad', 'wrong', 'incorrect', 'missing', 'fails',
+                    'violates', 'lacks', 'inadequate', 'inconsistent', 'weak',
+                    'off-topic', 'ignores', 'deviates']
         
-        # Fill in None values with overall_score as fallback
-        final_overall = score_data["overall_score"] or 0.5
-        for key in ["role_adherence", "response_quality", "consistency"]:
-            if score_data[key] is None:
-                score_data[key] = final_overall
+        pos = sum(1 for w in positive if w in text_lower)
+        neg = sum(1 for w in negative if w in text_lower)
         
-        # Extract reasoning if not found
-        if not score_data["reasoning"]:
-            # Try to extract a summary sentence
-            sentences = text.split(".")
-            for sent in sentences:
-                if any(word in sent.lower() for word in ["overall", "summary", "conclusion", "score"]):
-                    score_data["reasoning"] = sent.strip()[:200]
-                    break
-            if not score_data["reasoning"]:
-                score_data["reasoning"] = text[:200].strip()
-        
-        console.print(f"[green]    ✓ Final score: {final_overall:.2f}[/green]")
-        
-        return BatchJudgeScore(model=model, **score_data)
+        if pos + neg > 0:
+            return max(0.2, min(0.9, 0.5 + 0.3 * (pos - neg) / (pos + neg + 1)))
+        return 0.5
+
+    def _extract_reasoning(self, text: str) -> str:
+        """Extract a reasoning sentence from unstructured text."""
+        for sent in text.split("."):
+            if any(w in sent.lower() for w in ["overall", "summary", "conclusion", "performance", "evaluation"]):
+                return sent.strip()[:300]
+        return text[:200].strip()
     
     def _synthesize_batch_result(
         self,
         judge_scores: list["BatchJudgeScore"],
         min_score: float,
     ) -> "BatchEvaluationResult":
-        """Synthesize final result from all judges (NO additional API call)."""
+        """Synthesize final result from all judges (NO additional API call).
+        
+        Uses weighted dimension scoring (matches prompt rubric):
+        - Role Adherence: 30%
+        - Response Quality: 30%
+        - Consistency: 20%
+        - Constraint Compliance: 20%
+        
+        Also uses outlier-resistant median for final score when judges disagree.
+        """
         if not judge_scores:
             return BatchEvaluationResult(
                 final_score=0.0,
@@ -583,39 +756,79 @@ SUMMARY: [1-2 sentence consensus summary]
                 recommendations=[],
             )
         
-        # Calculate weighted averages
         total = len(judge_scores)
-        final_score = sum(s.overall_score for s in judge_scores) / total
+        
+        # Dimension averages
         role_adherence = sum(s.role_adherence for s in judge_scores) / total
         response_quality = sum(s.response_quality for s in judge_scores) / total
         consistency = sum(s.consistency for s in judge_scores) / total
+        constraint_compliance = sum(s.constraint_compliance for s in judge_scores) / total
         
-        # Determine confidence based on judge agreement
-        score_std = self._calculate_std([s.overall_score for s in judge_scores])
-        if score_std < 0.1:
+        # Weighted final score from dimensions (not just averaging overall_score)
+        weighted_score = (
+            role_adherence * 0.30
+            + response_quality * 0.30
+            + consistency * 0.20
+            + constraint_compliance * 0.20
+        )
+        
+        # Use median of judge overall_scores if they diverge significantly
+        overall_scores = sorted([s.overall_score for s in judge_scores])
+        score_std = self._calculate_std(overall_scores)
+        if score_std > 0.15 and total >= 3:
+            # High disagreement — use median to resist outliers
+            median_score = overall_scores[total // 2]
+            final_score = (median_score + weighted_score) / 2
+        else:
+            final_score = (sum(overall_scores) / total + weighted_score) / 2
+        
+        final_score = round(final_score, 4)
+        
+        # Confidence from per-dimension agreement
+        dimension_stds = [
+            self._calculate_std([s.role_adherence for s in judge_scores]),
+            self._calculate_std([s.response_quality for s in judge_scores]),
+            self._calculate_std([s.consistency for s in judge_scores]),
+            self._calculate_std([s.constraint_compliance for s in judge_scores]),
+        ]
+        avg_std = sum(dimension_stds) / len(dimension_stds)
+        if avg_std < 0.08:
             confidence = "high"
-        elif score_std < 0.2:
+        elif avg_std < 0.18:
             confidence = "medium"
         else:
             confidence = "low"
         
-        # Aggregate weak areas from all judges
-        all_weak_areas = []
+        # Aggregate weak areas — rank by frequency
+        weak_area_counts: dict[str, int] = {}
         for s in judge_scores:
-            all_weak_areas.extend(s.weak_areas)
+            for area in s.weak_areas:
+                area_normalized = area.strip().lower()
+                weak_area_counts[area_normalized] = weak_area_counts.get(area_normalized, 0) + 1
         
-        # Count frequency of weak areas
-        weak_area_counts = {}
-        for area in all_weak_areas:
-            weak_area_counts[area] = weak_area_counts.get(area, 0) + 1
+        # Recommendations: areas flagged by 2+ judges first, then singles
+        sorted_areas = sorted(weak_area_counts.items(), key=lambda x: -x[1])
+        recommendations = [area for area, count in sorted_areas if count >= 2]
+        if not recommendations:
+            recommendations = [area for area, _ in sorted_areas[:3]]
         
-        # Recommendations = weak areas mentioned by multiple judges
-        recommendations = [area for area, count in weak_area_counts.items() if count >= 2]
-        if not recommendations and all_weak_areas:
-            recommendations = list(set(all_weak_areas))[:3]
+        # Find the weakest dimension for actionable feedback
+        dimension_scores = {
+            "role_adherence": role_adherence,
+            "response_quality": response_quality,
+            "consistency": consistency,
+            "constraint_compliance": constraint_compliance,
+        }
+        weakest = min(dimension_scores, key=dimension_scores.get)
+        weakest_val = dimension_scores[weakest]
         
-        # Create summary
-        summary = f"Score: {final_score:.2f} | Role: {role_adherence:.2f} | Quality: {response_quality:.2f} | Consistency: {consistency:.2f}"
+        summary = (
+            f"Score: {final_score:.2f} | "
+            f"Role: {role_adherence:.2f} | Quality: {response_quality:.2f} | "
+            f"Consistency: {consistency:.2f} | Constraints: {constraint_compliance:.2f}"
+        )
+        if weakest_val < 0.7:
+            summary += f" | ⚠ Weakest: {weakest.replace('_', ' ')} ({weakest_val:.2f})"
         
         return BatchEvaluationResult(
             final_score=final_score,
@@ -625,9 +838,11 @@ SUMMARY: [1-2 sentence consensus summary]
             summary=summary,
             recommendations=recommendations,
             breakdown={
-                "role_adherence": role_adherence,
-                "response_quality": response_quality,
-                "consistency": consistency,
+                "role_adherence": round(role_adherence, 4),
+                "response_quality": round(response_quality, 4),
+                "consistency": round(consistency, 4),
+                "constraint_compliance": round(constraint_compliance, 4),
+                "weakest_dimension": weakest,
             },
         )
 
@@ -643,6 +858,7 @@ class BatchJudgeScore(BaseModel):
     role_adherence: float
     response_quality: float
     consistency: float
+    constraint_compliance: float = 0.5
     reasoning: str
     weak_areas: list[str] = []
 
