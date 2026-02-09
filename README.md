@@ -64,18 +64,85 @@ pip install -e .
    ```bash
    promptlab init
    ```
-   Creates configuration files and directory structure
+   Creates complete project structure:
+   - `promptlab.yaml` — main configuration
+   - `bsp.txt` — behavior specification template
+   - `.gitignore` — PromptLab patterns
+   - `temp/example.yaml` — example test suite
+   - `.promptlab/` — baseline storage
 
-2. **Setup Provider**
-   - Local (Ollama): `promptlab setup ollama`
-   - Cloud (OpenRouter): `promptlab setup openrouter --api-key YOUR_KEY`
+2. **Choose Provider** (interactive or quick setup)
+   ```bash
+   # Interactive (recommended for first time)
+   promptlab init
+   
+   # Quick setup with Google AI Studio (FREE, recommended)
+   promptlab init -p google -k YOUR_GOOGLE_API_KEY
+   
+   # Quick setup with OpenRouter (FREE tier available)
+   promptlab init -p openrouter -k YOUR_OPENROUTER_KEY
+   
+   # Local with Ollama (FREE, no API key needed)
+   promptlab init -p ollama
+   ```
 
 3. **Run Validation**
    ```bash
    promptlab validate
    ```
 
-That's it! Your first validation runs automatically.
+That's it! Your first validation runs automatically with intelligent model fallback.
+
+---
+
+## 🖥️ CLI Commands
+
+PromptLab provides a comprehensive set of commands:
+
+### Project Setup
+
+| Command | Description |
+|---------|-------------|
+| `promptlab init` | **Full project setup** — creates all config files, bsp.txt, .gitignore |
+| `promptlab setup <provider>` | **Quick config update** — switch providers or update API keys |
+| `promptlab ci-setup` | Generate GitHub Actions workflow for CI/CD |
+
+### Validation & Testing
+
+| Command | Description |
+|---------|-------------|
+| `promptlab validate` | Run full BSP validation with council evaluation |
+| `promptlab lint-bsp` | Check BSP for quality issues (FREE, no API calls) |
+| `promptlab guardrail` | Run adversarial security tests against your BSP |
+
+### Optimization & History
+
+| Command | Description |
+|---------|-------------|
+| `promptlab optimize-bsp` | Iteratively improve BSP using AI + linting feedback |
+| `promptlab history` | View evaluation history and score trends (FREE) |
+
+### Examples
+
+```bash
+# Initialize new project with Google AI Studio
+promptlab init -p google -k AIza...
+
+# Lint your BSP (no API calls, completely free)
+promptlab lint-bsp
+
+# Run full validation
+promptlab validate
+
+# View score trends
+promptlab history
+
+# Run security tests
+promptlab guardrail
+
+# Optimize BSP with AI feedback
+promptlab optimize-bsp
+```
 
 ---
 
@@ -401,17 +468,40 @@ Configuration via GitHub Secrets for API keys.
 
 ## 🛠️ Provider Support
 
-PromptLab works with multiple LLM providers:
+PromptLab works with multiple LLM providers with **automatic fallback**:
 
-**Local Inference**
-- Ollama (unlimited, private, free)
+### Recommended (FREE)
 
-**Cloud APIs**
-- OpenRouter (100+ models, pay-as-you-go)
-- OpenAI (GPT models)
-- Anthropic (Claude models)
-- Google (Gemini models)
-- xAI (Grok models)
+| Provider | Setup | Rate Limits | Best For |
+|----------|-------|-------------|----------|
+| **Google AI Studio** | `promptlab init -p google -k KEY` | 15 RPM | High-quality, free, fast |
+| **OpenRouter** | `promptlab init -p openrouter -k KEY` | Varies | Many free models, fallback |
+| **Ollama** | `promptlab init -p ollama` | Unlimited | Local, private, no limits |
+
+### Other Providers
+
+| Provider | Setup | Notes |
+|----------|-------|-------|
+| OpenAI | `promptlab setup openai -k KEY` | GPT-4o, paid |
+| Anthropic | `promptlab setup anthropic -k KEY` | Claude, paid |
+| xAI | `promptlab setup xai -k KEY` | Grok, paid |
+
+### Multi-Provider Fallback
+
+When a model gets rate-limited, PromptLab automatically:
+1. Retries with exponential backoff (up to 4 retries)
+2. Falls back to next available model from the pool
+3. Uses models from other configured providers
+
+```yaml
+# promptlab.yaml — configure multiple providers
+models:
+  providers:
+    google:
+      api_key: AIza...
+    openrouter:
+      api_key: sk-or-...
+```
 
 Switch providers without code changes via configuration.
 
@@ -421,27 +511,33 @@ Switch providers without code changes via configuration.
 
 ### Development (Free Options)
 
+**Google AI Studio (Recommended)**
+- Gemini 2.5 Flash (fast, high quality)
+- Gemini 2.0 Flash Lite (even faster)
+- Gemini 2.5 Pro (chairman, premium quality)
+
+**OpenRouter Free Tier**
+- Meta Llama 3.3 70B (high quality)
+- Google Gemma 3 27B (diverse)
+- Arcee Trinity Large (good for chairman)
+
 **Local Ollama**
 - Llama 3.1 8B (fast, capable)
 - Mistral 7B (good reasoning)
 - Gemma 2 9B (quality responses)
 
-**OpenRouter Free Tier**
-- Meta Llama 3.3 70B (high quality)
-- Meta Llama 3.1 8B (fast)
-- Google Gemma models (diverse)
-
 ### Production (Paid Options)
 
 **High Quality Council**
+- Google Gemini 2.5 Pro (best reasoning)
 - OpenAI GPT-4o Mini ($0.15/1M tokens)
-- Google Gemini Flash 1.5 ($0.075/1M tokens)
 - Anthropic Claude 3.5 Sonnet (premium)
 
 **Cost-Effective Strategy**
-- Mix free and paid models
-- Free for initial judging
-- Paid for chairman synthesis
+- Use Google AI Studio free tier for development
+- Mix free Google + OpenRouter models in council
+- Use Gemini Pro as chairman (15 free requests/min)
+- Reserve paid models for production validation
 
 ---
 
@@ -450,12 +546,16 @@ Switch providers without code changes via configuration.
 ### Rate Limiting
 **Symptom**: 429 errors, "Rate limited after 5 retries"
 
-**Solutions**:
-- Switch to different free models
+**How PromptLab handles it automatically**:
+1. Retries with exponential backoff (up to 4 attempts per model)
+2. Falls back to next model in the dynamic pool
+3. Uses models from other configured providers
+
+**Additional solutions if fallback exhausted**:
+- Configure both Google + OpenRouter for more fallback options
 - Use local Ollama (unlimited)
-- Reduce parallelism
-- Add request delays
-- Upgrade to paid tier
+- Reduce parallelism in config
+- Wait for rate limit cooldown (90 seconds)
 
 ### Empty Model Responses
 **Symptom**: Council score always 0.50
@@ -549,6 +649,13 @@ Switch providers without code changes via configuration.
 - ✅ Baseline tracking and git integration
 - ✅ GitHub Actions CI/CD workflows
 - ✅ BSP validation workflow
+- ✅ Google AI Studio integration (FREE, 15 RPM)
+- ✅ Dynamic model pool with auto-discovery
+- ✅ Intelligent model fallback (cross-provider)
+- ✅ BSP linting for quality checks
+- ✅ Adversarial guardrail testing
+- ✅ BSP optimization with AI feedback
+- ✅ Evaluation history tracking
 
 **In Progress**
 - 🔄 VS Code extension for integrated testing
