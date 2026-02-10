@@ -802,6 +802,43 @@ def validate_bsp(
     try:
         result = asyncio.run(run_validation())
         
+        # Record evaluation history
+        from promptlab.utils.history import EvaluationHistory
+        history = EvaluationHistory(cwd)
+        
+        # Extract detailed scores if available
+        role_adherence = 0.0
+        response_quality = 0.0
+        consistency = 0.0
+        confidence = "medium"
+        weak_areas = []
+        
+        if result.council_result:
+            confidence = result.council_result.confidence
+            # Try to extract subscores if they exist
+            if hasattr(result.council_result, 'role_adherence'):
+                role_adherence = result.council_result.role_adherence
+            if hasattr(result.council_result, 'response_quality'):
+                response_quality = result.council_result.response_quality
+            if hasattr(result.council_result, 'consistency'):
+                consistency = result.council_result.consistency
+            if hasattr(result.council_result, 'weak_areas'):
+                weak_areas = result.council_result.weak_areas or []
+        
+        history.record(
+            overall_score=result.council_score,
+            bsp_version=result.bsp_version or config.bsp.version if config.bsp else "1.0.0",
+            bsp_hash=result.bsp_hash[:16] if result.bsp_hash else "",
+            model=result.model or config.models.default,
+            role_adherence=role_adherence,
+            response_quality=response_quality,
+            consistency=consistency,
+            confidence=confidence,
+            total_tests=result.total_tests,
+            weak_areas=weak_areas,
+            notes=f"Baseline: {result.baseline_score:.2f}" if result.baseline_score else "",
+        )
+        
         # Save baseline if improved
         if save_baseline and result.should_push:
             baseline_manager = BaselineManager(cwd / ".promptlab")
