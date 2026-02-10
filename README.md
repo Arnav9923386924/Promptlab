@@ -103,8 +103,7 @@ PromptLab provides a comprehensive set of commands:
 
 | Command | Description |
 |---------|-------------|
-| `promptlab init` | **Full project setup** — creates all config files, bsp.txt, .gitignore |
-| `promptlab setup <provider>` | **Quick config update** — switch providers or update API keys |
+| `promptlab init` | **Initialize project** — creates all config files, bsp.txt, .gitignore |
 | `promptlab ci-setup` | Generate GitHub Actions workflow for CI/CD |
 
 ### Validation & Testing
@@ -482,9 +481,9 @@ PromptLab works with multiple LLM providers with **automatic fallback**:
 
 | Provider | Setup | Notes |
 |----------|-------|-------|
-| OpenAI | `promptlab setup openai -k KEY` | GPT-4o, paid |
-| Anthropic | `promptlab setup anthropic -k KEY` | Claude, paid |
-| xAI | `promptlab setup xai -k KEY` | Grok, paid |
+| OpenAI | `promptlab init -p openai -k KEY` | GPT-4o, paid |
+| Anthropic | `promptlab init -p anthropic -k KEY` | Claude, paid |
+| xAI | `promptlab init -p xai -k KEY` | Grok, paid |
 
 ### Multi-Provider Fallback
 
