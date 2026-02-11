@@ -1,11 +1,21 @@
-"""Configuration loader for PromptLab."""
+"""Configuration loader for PromptLab.
+
+Supports ${VAR} env-var expansion in YAML values.
+Auto-loads .env files from the project root via python-dotenv.
+"""
 
 from pathlib import Path
 from typing import Optional
 import os
+import re
 import yaml
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+except ImportError:  # pragma: no cover
+    _load_dotenv = None  # type: ignore
 
 
 class ProviderConfig(BaseModel):
@@ -129,8 +139,36 @@ class PromptLabConfig(BaseModel):
     training_data: TrainingDataConfig = TrainingDataConfig()
 
 
+_ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _expand_env_vars(value: str) -> str:
+    """Expand all ${VAR} references in a string to os.environ values.
+    
+    Supports ${VAR} anywhere in the string (not just whole-value).
+    Returns the original placeholder if the env var is unset.
+    """
+    def _replace(m: re.Match) -> str:
+        return os.environ.get(m.group(1), m.group(0))
+    return _ENV_VAR_RE.sub(_replace, value)
+
+
+def _deep_expand(obj: object) -> object:
+    """Recursively expand ${VAR} in all string values of a dict/list tree."""
+    if isinstance(obj, str):
+        return _expand_env_vars(obj)
+    if isinstance(obj, dict):
+        return {k: _deep_expand(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_deep_expand(v) for v in obj]
+    return obj
+
+
 def load_config(path: Optional[Path] = None) -> PromptLabConfig:
     """Load configuration from promptlab.yaml.
+    
+    Automatically loads .env from the config file's directory (if present)
+    before expanding ${VAR} placeholders throughout the YAML.
     
     Args:
         path: Path to config file (default: ./promptlab.yaml)
@@ -144,26 +182,28 @@ def load_config(path: Optional[Path] = None) -> PromptLabConfig:
     if not path.exists():
         return PromptLabConfig()
     
+    # Auto-load .env from the same directory as promptlab.yaml
+    env_file = path.parent / ".env"
+    if env_file.exists():
+        if _load_dotenv is not None:
+            _load_dotenv(env_file, override=False)
+        else:
+            # Minimal fallback: parse KEY=VALUE lines when python-dotenv is missing
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, val = line.partition("=")
+                    key, val = key.strip(), val.strip()
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+    
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     
-    # Expand environment variables in API keys
-    if "models" in data and "providers" in data["models"]:
-        for provider, config in data["models"]["providers"].items():
-            if isinstance(config, dict) and "api_key" in config:
-                api_key = config["api_key"]
-                if isinstance(api_key, str) and api_key.startswith("${") and api_key.endswith("}"):
-                    env_var = api_key[2:-1]
-                    config["api_key"] = os.environ.get(env_var, "")
-    
-    # Expand environment variables in scraper config
-    if "scraper" in data:
-        for key in ["serpapi_key", "brave_api_key"]:
-            if key in data["scraper"]:
-                value = data["scraper"][key]
-                if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                    env_var = value[2:-1]
-                    data["scraper"][key] = os.environ.get(env_var, "")
+    # Recursively expand ${VAR} in the entire config tree
+    data = _deep_expand(data)
     
     # Load BSP from file if specified
     if "bsp" in data and "prompt_file" in data["bsp"]:

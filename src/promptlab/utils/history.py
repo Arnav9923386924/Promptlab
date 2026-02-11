@@ -29,6 +29,7 @@ class HistoryEntry:
     total_tests: int = 0
     weak_areas: list[str] = field(default_factory=list)
     notes: str = ""
+    parse_error: bool = False  # True if LLM output was malformed
 
 
 @dataclass
@@ -112,22 +113,23 @@ class EvaluationHistory:
         total_tests: int = 0,
         weak_areas: Optional[list[str]] = None,
         notes: str = "",
+        parse_error: bool = False,
     ):
         """Record an evaluation result.
         
-        Args:
-            overall_score: The overall evaluation score (0.0-1.0)
-            bsp_version: Version of the BSP
-            bsp_hash: Hash of the BSP content
-            model: Model being evaluated
-            role_adherence: Role adherence score
-            response_quality: Response quality score
-            consistency: Consistency score
-            confidence: Confidence level
-            total_tests: Number of tests run
-            weak_areas: List of identified weak areas
-            notes: Optional notes
+        Consistency guard: if overall_score > 0 but all dimensions are 0.0
+        and parse_error is not explicitly set, backfill dimensions from
+        overall_score and flag parse_error so history is never silently
+        inconsistent.
         """
+        dims = [role_adherence, response_quality, consistency]
+        if overall_score > 0 and all(d == 0.0 for d in dims) and not parse_error:
+            # Back-fill dimensions from overall to avoid silent zeros
+            role_adherence = overall_score
+            response_quality = overall_score
+            consistency = overall_score
+            parse_error = True
+        
         entry = HistoryEntry(
             timestamp=datetime.now().isoformat(),
             bsp_version=bsp_version,
@@ -141,6 +143,7 @@ class EvaluationHistory:
             total_tests=total_tests,
             weak_areas=weak_areas or [],
             notes=notes,
+            parse_error=parse_error,
         )
         self._history.append(entry)
         self._save()

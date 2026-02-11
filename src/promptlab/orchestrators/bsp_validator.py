@@ -12,6 +12,9 @@ This module handles the complete BSP validation workflow:
 import asyncio
 import json
 import hashlib
+import random
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Literal
@@ -31,6 +34,107 @@ from promptlab.orchestrators.models import TestCase, TestSuite
 from promptlab.utils.model_pool import ModelPool
 
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunTelemetry:
+    """Tracks per-run metrics for observability."""
+    run_id: str = ""
+    total_requests: int = 0
+    retries: int = 0
+    rate_limit_429s: int = 0
+    per_model: dict = field(default_factory=dict)  # model -> {ok, fail, latency_sum}
+    start_time: float = 0.0
+    end_time: float = 0.0
+
+    def record_request(self, model: str, success: bool, latency_ms: int = 0, is_429: bool = False) -> None:
+        self.total_requests += 1
+        bucket = self.per_model.setdefault(model, {"ok": 0, "fail": 0, "latency_sum": 0})
+        if success:
+            bucket["ok"] += 1
+            bucket["latency_sum"] += latency_ms
+        else:
+            bucket["fail"] += 1
+        if is_429:
+            self.rate_limit_429s += 1
+
+    def record_retry(self) -> None:
+        self.retries += 1
+
+    @property
+    def avg_latency_ms(self) -> float:
+        total_ok = sum(m["ok"] for m in self.per_model.values())
+        total_lat = sum(m["latency_sum"] for m in self.per_model.values())
+        return total_lat / total_ok if total_ok else 0.0
+
+    def to_dict(self) -> dict:
+        self.end_time = self.end_time or time.time()
+        return {
+            "run_id": self.run_id,
+            "total_requests": self.total_requests,
+            "retries": self.retries,
+            "rate_limit_429s": self.rate_limit_429s,
+            "avg_latency_ms": round(self.avg_latency_ms, 1),
+            "wall_time_s": round(self.end_time - self.start_time, 2),
+            "per_model": self.per_model,
+        }
+
+    def save(self, project_root: Path) -> Path:
+        out_dir = project_root / ".promptlab" / "runs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{self.run_id}_telemetry.json"
+        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        return path
+
+    def print_summary(self) -> None:
+        console.print()
+        t = Table(title="Run Telemetry", show_header=True, header_style="bold cyan")
+        t.add_column("Metric")
+        t.add_column("Value", justify="right")
+        t.add_row("Total API requests", str(self.total_requests))
+        t.add_row("Retries", str(self.retries))
+        t.add_row("429 rate-limits", str(self.rate_limit_429s))
+        t.add_row("Avg latency", f"{self.avg_latency_ms:.0f} ms")
+        t.add_row("Wall time", f"{self.end_time - self.start_time:.1f} s")
+        console.print(t)
+        if self.per_model:
+            mt = Table(title="Per-Model Stats", show_header=True, header_style="dim")
+            mt.add_column("Model")
+            mt.add_column("OK", justify="right")
+            mt.add_column("Fail", justify="right")
+            mt.add_column("Avg ms", justify="right")
+            for m, s in self.per_model.items():
+                avg = s["latency_sum"] / s["ok"] if s["ok"] else 0
+                mt.add_row(m.split("/")[-1][:30], str(s["ok"]), str(s["fail"]), f"{avg:.0f}")
+            console.print(mt)
+
+
+# ---------------------------------------------------------------------------
+# Per-model cooldown tracker  (shared across the run)
+# ---------------------------------------------------------------------------
+
+class _CooldownTracker:
+    """Tracks per-model 429 backoff so we don't retry known-rate-limited models."""
+
+    def __init__(self) -> None:
+        self._blocked: dict[str, float] = {}  # model -> unblock_ts
+
+    def mark(self, model: str, base_delay: float = 10.0, jitter: float = 3.0) -> None:
+        cooldown = base_delay + random.uniform(0, jitter)
+        self._blocked[model] = time.time() + cooldown
+
+    def is_available(self, model: str) -> bool:
+        deadline = self._blocked.get(model)
+        if deadline is None:
+            return True
+        if time.time() >= deadline:
+            del self._blocked[model]
+            return True
+        return False
 
 
 @dataclass
@@ -166,6 +270,15 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         self.config = config
         self.project_root = project_root or Path.cwd()
         
+        # Concurrency: bounded semaphore driven by testing.parallelism
+        self._semaphore = asyncio.Semaphore(max(1, config.testing.parallelism))
+        
+        # Per-model cooldown tracker (avoids hammering rate-limited models)
+        self._cooldown = _CooldownTracker()
+        
+        # Telemetry for the current run
+        self.telemetry = RunTelemetry()
+        
         # Initialize LLM runner
         self.llm_runner = LLMRunner({
             "default": config.models.default,
@@ -223,7 +336,9 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
     ) -> BatchOutput:
         """Run all tests with BSP prepended to prompts.
         
-        Includes rate limiting to avoid 429 errors from API providers.
+        Uses bounded async concurrency (semaphore driven by config.testing.parallelism)
+        instead of a fixed global delay.  Per-model adaptive backoff with jitter
+        handles 429 errors without penalising other models.
         
         Args:
             test_files: List of test file paths
@@ -232,10 +347,8 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         Returns:
             BatchOutput containing all test outputs
         """
-        import asyncio
-        
         run_id = f"bsp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        outputs: list[TestOutput] = []
+        self.telemetry = RunTelemetry(run_id=run_id, start_time=time.time())
         
         # Collect all test cases
         all_cases: list[tuple[TestCase, TestSuite]] = []
@@ -244,37 +357,29 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             for case in suite.cases:
                 all_cases.append((case, suite))
         
-        console.print(f"[cyan]Running {len(all_cases)} tests with BSP (rate-limited)...[/cyan]")
+        parallelism = max(1, self.config.testing.parallelism)
+        console.print(f"[cyan]Running {len(all_cases)} tests (concurrency={parallelism})...[/cyan]")
         
-        # Rate limiting: delay between requests to avoid 429 errors
-        # OpenRouter free tier: ~20 req/min, so ~3 seconds between requests
-        rate_limit_delay = 3.0  # seconds between API calls
+        outputs: list[TestOutput] = [None] * len(all_cases)  # type: ignore[list-item]
+        completed = 0
         
-        if show_progress:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Running tests...", total=len(all_cases))
-                
-                for i, (case, suite) in enumerate(all_cases):
-                    progress.update(task, description=f"Running: {case.id}")
-                    output = await self._run_single_test(case, suite)
-                    outputs.append(output)
-                    progress.advance(task)
-                    
-                    # Rate limiting: wait between requests (skip for last one)
-                    if i < len(all_cases) - 1:
-                        await asyncio.sleep(rate_limit_delay)
-        else:
-            for i, (case, suite) in enumerate(all_cases):
-                output = await self._run_single_test(case, suite)
-                outputs.append(output)
-                
-                # Rate limiting
-                if i < len(all_cases) - 1:
-                    await asyncio.sleep(rate_limit_delay)
+        async def _run_slot(idx: int, case: TestCase, suite: TestSuite) -> None:
+            nonlocal completed
+            async with self._semaphore:
+                out = await self._run_single_test(case, suite)
+                outputs[idx] = out
+                completed += 1
+                if show_progress:
+                    console.print(f"  [{completed}/{len(all_cases)}] {case.id}")
+        
+        # Launch all tasks; the semaphore limits active concurrency
+        tasks = [
+            asyncio.create_task(_run_slot(i, case, suite))
+            for i, (case, suite) in enumerate(all_cases)
+        ]
+        await asyncio.gather(*tasks)
+        
+        self.telemetry.end_time = time.time()
         
         return BatchOutput(
             run_id=run_id,
@@ -290,52 +395,77 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
     async def _run_single_test(self, case: TestCase, suite: TestSuite) -> TestOutput:
         """Run a single test case with BSP prepended.
         
-        Uses model fallback: if the primary model fails (rate limit, error),
-        automatically tries other models from the pool.
+        Uses adaptive retry with exponential backoff + jitter per provider on 429.
+        Falls back to alternative models via model pool when the primary is rate-limited.
+        Records telemetry for every attempt.
         """
-        # Build full prompt with BSP
         full_prompt = case.prompt
-        
-        # Get system prompt (BSP takes precedence)
         system_prompt = self.bsp
         if not system_prompt and suite.defaults:
             system_prompt = suite.defaults.system_prompt
         
-        # Get model
         model = case.model or (suite.defaults.model if suite.defaults else None) or self.config.models.default
         temperature = case.temperature if case.temperature is not None else (suite.defaults.temperature if suite.defaults else 0)
         
-        try:
-            # Build fallback model list from pool
-            fallback_models = await self._get_fallback_models()
+        # Build candidate list: primary + fallbacks, skipping cooled-down models
+        fallback_models = await self._get_fallback_models()
+        candidates = [model] + [m for m in fallback_models if m != model]
+        
+        max_retries = 3
+        for candidate in candidates:
+            if not self._cooldown.is_available(candidate):
+                continue  # skip models still in cooldown
             
-            completion = await self.llm_runner.complete_with_fallback(
-                prompt=full_prompt,
-                fallback_models=fallback_models,
-                model=model,
-                system_prompt=system_prompt,
-                temperature=temperature,
-                max_tokens=case.max_tokens or 1000,
-            )
-            
-            return TestOutput(
-                test_id=case.id,
-                prompt=full_prompt,
-                bsp=system_prompt or "",
-                response=completion.text,
-                expected=case.expected,
-                latency_ms=completion.latency_ms,
-                tokens_in=completion.tokens_in,
-                tokens_out=completion.tokens_out,
-            )
-        except Exception as e:
-            return TestOutput(
-                test_id=case.id,
-                prompt=full_prompt,
-                bsp=system_prompt or "",
-                response=f"ERROR: {str(e)}",
-                expected=case.expected,
-            )
+            for attempt in range(max_retries):
+                t0 = time.time()
+                try:
+                    completion = await self.llm_runner.complete(
+                        prompt=full_prompt,
+                        model=candidate,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=case.max_tokens or 1000,
+                    )
+                    latency = int((time.time() - t0) * 1000)
+                    self.telemetry.record_request(candidate, success=True, latency_ms=latency)
+                    
+                    return TestOutput(
+                        test_id=case.id,
+                        prompt=full_prompt,
+                        bsp=system_prompt or "",
+                        response=completion.text,
+                        expected=case.expected,
+                        latency_ms=completion.latency_ms or latency,
+                        tokens_in=completion.tokens_in,
+                        tokens_out=completion.tokens_out,
+                    )
+                except Exception as e:
+                    err = str(e).lower()
+                    is_429 = any(w in err for w in ["429", "rate limit", "rate_limit", "resource_exhausted", "quota"])
+                    self.telemetry.record_request(candidate, success=False, is_429=is_429)
+                    
+                    if is_429:
+                        self._cooldown.mark(candidate, base_delay=8.0 * (attempt + 1), jitter=4.0)
+                        self.telemetry.record_retry()
+                        # Exponential backoff + jitter before next attempt on SAME model
+                        delay = (2 ** attempt) + random.uniform(0, 2)
+                        await asyncio.sleep(delay)
+                        break  # move to next candidate model
+                    else:
+                        self.telemetry.record_retry()
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.0)
+                        continue
+        
+        # All candidates exhausted
+        self.telemetry.record_request(model, success=False)
+        return TestOutput(
+            test_id=case.id,
+            prompt=full_prompt,
+            bsp=system_prompt or "",
+            response="ERROR: All models exhausted after retries",
+            expected=case.expected,
+        )
     
     async def _get_fallback_models(self) -> list[str]:
         """Get fallback model list from the model pool.
@@ -475,54 +605,83 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         return "\n".join(formatted)
     
     def _parse_batch_scores(self, text: str) -> dict:
-        """Parse scores from council evaluation response."""
-        scores = {
-            "role_adherence": 0.5,
-            "response_quality": 0.5,
-            "consistency": 0.5,
-            "appropriateness": 0.5,
-            "final_score": 0.5,
+        """Parse scores from council evaluation response.
+        
+        Scoring reliability rules:
+        - If dimension scores are missing but overall exists, backfill deterministically
+          and log a warning.
+        - If output is fully malformed, flag parse_error=True — never silently write zeros.
+        """
+        import re as _re
+        
+        scores: dict = {
+            "role_adherence": None,
+            "response_quality": None,
+            "consistency": None,
+            "appropriateness": None,
+            "final_score": None,
             "confidence": "medium",
             "summary": "",
             "recommendations": [],
+            "parse_error": False,
+        }
+        
+        field_map = {
+            "ROLE_ADHERENCE": "role_adherence",
+            "RESPONSE_QUALITY": "response_quality",
+            "CONSISTENCY": "consistency",
+            "APPROPRIATENESS": "appropriateness",
+            "FINAL_SCORE": "final_score",
+            "OVERALL_SCORE": "final_score",
         }
         
         for line in text.split("\n"):
             line = line.strip()
-            if line.startswith("ROLE_ADHERENCE:"):
-                try:
-                    scores["role_adherence"] = float(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif line.startswith("RESPONSE_QUALITY:"):
-                try:
-                    scores["response_quality"] = float(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif line.startswith("CONSISTENCY:"):
-                try:
-                    scores["consistency"] = float(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif line.startswith("APPROPRIATENESS:"):
-                try:
-                    scores["appropriateness"] = float(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif line.startswith("FINAL_SCORE:"):
-                try:
-                    scores["final_score"] = float(line.split(":")[-1].strip())
-                except ValueError:
-                    pass
-            elif line.startswith("CONFIDENCE:"):
+            upper = line.upper()
+            for prefix, key in field_map.items():
+                if upper.startswith(prefix + ":"):
+                    match = _re.search(r"[\d.]+", line.split(":", 1)[-1])
+                    if match:
+                        val = float(match.group())
+                        if 0 <= val <= 1:
+                            scores[key] = val
+                        elif 1 < val <= 10:
+                            scores[key] = val / 10
+                        elif 10 < val <= 100:
+                            scores[key] = val / 100
+                    break
+            if upper.startswith("CONFIDENCE:"):
                 conf = line.split(":")[-1].strip().lower()
-                if conf in ["high", "medium", "low"]:
+                if conf in ("high", "medium", "low"):
                     scores["confidence"] = conf
-            elif line.startswith("SUMMARY:"):
+            elif upper.startswith("SUMMARY:"):
                 scores["summary"] = line.split(":", 1)[-1].strip()
-            elif line.startswith("RECOMMENDATIONS:"):
+            elif upper.startswith("RECOMMENDATIONS:"):
                 recs = line.split(":", 1)[-1].strip()
                 scores["recommendations"] = [r.strip() for r in recs.split(",") if r.strip()]
+        
+        # --- Scoring reliability ---
+        dims = ["role_adherence", "response_quality", "consistency", "appropriateness"]
+        non_null_dims = {k: scores[k] for k in dims if scores[k] is not None}
+        
+        if scores["final_score"] is not None and not non_null_dims:
+            # Overall exists but all dimensions missing → backfill deterministically
+            console.print("[yellow]  ⚠ Dimensions missing — backfilling from overall score[/yellow]")
+            for k in dims:
+                scores[k] = scores["final_score"]
+        elif non_null_dims and scores["final_score"] is None:
+            # Dimensions exist but overall missing → compute weighted average
+            scores["final_score"] = sum(non_null_dims.values()) / len(non_null_dims)
+        
+        # Fill any remaining Nones with overall (or 0.5 fallback)
+        fallback_val = scores["final_score"] if scores["final_score"] is not None else 0.5
+        for k in dims:
+            if scores[k] is None:
+                scores[k] = fallback_val
+        if scores["final_score"] is None:
+            scores["final_score"] = fallback_val
+            scores["parse_error"] = True
+            console.print("[red]  ✗ Could not parse any scores — flagging parse_error[/red]")
         
         return scores
     
@@ -658,6 +817,11 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         
         # Print summary
         self._print_validation_summary(result)
+        
+        # --- Telemetry: save + print ---
+        telem_path = self.telemetry.save(self.project_root)
+        self.telemetry.print_summary()
+        console.print(f"[dim]Telemetry saved to {telem_path}[/dim]")
         
         return result
     

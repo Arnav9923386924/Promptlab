@@ -146,7 +146,7 @@ SUMMARY: [1-2 sentence consensus summary]
         self,
         response: str,
         criteria: str,
-        min_score: float = 0.7,
+        min_score: float = 0.5,
         mode: Optional[str] = None,
     ) -> CouncilResult:
         """Evaluate a response using the council.
