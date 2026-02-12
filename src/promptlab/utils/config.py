@@ -37,6 +37,8 @@ class CouncilConfig(BaseModel):
     mode: str = "fast"
     members: list[str] = []
     chairman: Optional[str] = None
+    use_fixed_judges: bool = False
+    debug_judge_responses: bool = False
 
 
 class TestingConfig(BaseModel):
@@ -183,10 +185,12 @@ def load_config(path: Optional[Path] = None) -> PromptLabConfig:
         return PromptLabConfig()
     
     # Auto-load .env from the same directory as promptlab.yaml
+    # override=True ensures .env values always take precedence over stale
+    # shell env vars (e.g. leftover OPENROUTER_API_KEY from a prior session).
     env_file = path.parent / ".env"
     if env_file.exists():
         if _load_dotenv is not None:
-            _load_dotenv(env_file, override=False)
+            _load_dotenv(env_file, override=True)
         else:
             # Minimal fallback: parse KEY=VALUE lines when python-dotenv is missing
             for line in env_file.read_text(encoding="utf-8").splitlines():
@@ -196,7 +200,7 @@ def load_config(path: Optional[Path] = None) -> PromptLabConfig:
                 if "=" in line:
                     key, _, val = line.partition("=")
                     key, val = key.strip(), val.strip()
-                    if key and key not in os.environ:
+                    if key:
                         os.environ[key] = val
     
     with open(path, "r", encoding="utf-8") as f:

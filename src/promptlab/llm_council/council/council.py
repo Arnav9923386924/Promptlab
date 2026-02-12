@@ -194,6 +194,14 @@ SUMMARY: [1-2 sentence consensus summary]
         # Get judge models from pool (preferred + discovered free models)
         judge_models = await self._get_judge_model_list()
         target_judges = max(len(self.members), 2)
+        
+        # STRICT MODE: If use_fixed_judges is True, ONLY try configured members
+        # Do NOT fallback to random pool models. This ensures reproducibility.
+        use_fixed_judges = self.config.get("use_fixed_judges", False)
+        if use_fixed_judges:
+            judge_models = list(self.members)  # Override with ONLY configured judges
+            console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
+        
         prompt = self.JUDGE_PROMPT.format(criteria=criteria, response=response)
 
         scores = []
@@ -275,15 +283,23 @@ SUMMARY: [1-2 sentence consensus summary]
         )
 
     async def _get_judge_model_list(self, extra_fallbacks: int = 0) -> list[str]:
-        """Get ordered list of ALL judge models: preferred first, then pool by param count.
+        """Get ordered list of judge models.
         
-        Initializes the model pool on first call. If pool is unavailable,
-        returns config members only. No cap on count — returns every available
-        model so the loop can keep trying until one works.
-            
+        BEHAVIOR:
+        - If use_fixed_judges=True in config: ONLY uses configured members (reproducible)
+        - Otherwise: Uses preferred first, then discovers free models from pool
+        
         Returns:
-            Full list of model IDs to try in order (highest capability first)
+            List of model IDs to try in order
         """
+        # Check if strict fixed-judge mode is enabled
+        use_fixed_judges = self.config.get("use_fixed_judges", False)
+        
+        if use_fixed_judges:
+            # STRICT MODE: Only use configured members, no dynamic discovery
+            return list(self.members)
+        
+        # DYNAMIC MODE: Try preferred, then fallback to pool
         if self.model_pool:
             if not self.model_pool.initialized:
                 await self.model_pool.initialize()
@@ -455,6 +471,13 @@ SUMMARY: [1-2 sentence consensus summary]
         judge_models = await self._get_judge_model_list()
         target_judges = max(len(self.members), 2)
         
+        # STRICT MODE: If use_fixed_judges is True, ONLY try configured members
+        # Do NOT fallback to random pool models. This ensures reproducibility.
+        use_fixed_judges = self.config.get("use_fixed_judges", False)
+        if use_fixed_judges:
+            judge_models = list(self.members)  # Override with ONLY configured judges
+            console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
+        
         # Sequential judging with dynamic fallback and early-agreement optimization
         judge_results: list[BatchJudgeScore] = []
         
@@ -487,13 +510,21 @@ SUMMARY: [1-2 sentence consensus summary]
                 if std < 0.06:
                     console.print(f"[green]  ✓ Early agreement (σ={std:.3f}) — skipping remaining judges[/green]")
                     break
+                elif std > 0.20 and len(judge_results) < target_judges:
+                    # High disagreement - need MORE judges, not fewer
+                    console.print(f"[yellow]  ⚠ High disagreement (σ={std:.3f}) — adding more judges for accuracy[/yellow]")
+                    target_judges = min(target_judges + 1, len(judge_models))  # Add 1 more judge
             
             # Brief pause between successful calls (shared API key quota)
             await asyncio.sleep(1.0)
         
         # Fallback if all failed
         if not judge_results:
-            console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
+            if use_fixed_judges:
+                console.print("[red]  ✗ All configured judges failed in STRICT mode.[/red]")
+                console.print("[yellow]    Tip: Set use_fixed_judges=false to enable fallback to pool models[/yellow]")
+            else:
+                console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
             judge_results.append(BatchJudgeScore(
                 model="fallback",
                 overall_score=0.5,
@@ -505,8 +536,19 @@ SUMMARY: [1-2 sentence consensus summary]
                 weak_areas=[],
             ))
         
-        # Synthesize final score
-        final_result = self._synthesize_batch_result(judge_results, min_score)
+        # Check for high judge disagreement BEFORE synthesis
+        if len(judge_results) >= 2:
+            overall_scores = [s.overall_score for s in judge_results]
+            score_std = self._calculate_std(overall_scores)
+            if score_std > 0.15:  # High disagreement threshold
+                console.print(f"[yellow]  ⚠ High judge disagreement (σ={score_std:.3f}). Invoking chairman for resolution...[/yellow]")
+                # Use chairman to resolve disagreement
+                final_result = await self._chairman_resolve_batch(judge_results, bsp, outputs, min_score)
+            else:
+                # Low disagreement - simple synthesis
+                final_result = self._synthesize_batch_result(judge_results, min_score)
+        else:
+            final_result = self._synthesize_batch_result(judge_results, min_score)
         
         pool_info = ""
         if self.model_pool and self.model_pool.initialized:
@@ -608,10 +650,22 @@ SUMMARY: [1-2 sentence consensus summary]
         # Parse all score fields
         score_data = self._parse_score_fields(text)
         
-        # Log concise summary
+        # DEBUG: Log raw response for troubleshooting low scores
         model_short = model.split('/')[-1][:25]
+        enable_debug = self.config.get("debug_judge_responses", False)
+        if enable_debug:
+            console.print(f"[dim]  DEBUG {model_short} raw response:[/dim]")
+            console.print(f"[dim]{text[:500]}...[/dim]")
+        
+        # Log concise summary
         if score_data["overall_score"] is not None:
-            console.print(f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/green]")
+            # Warn if score is suspiciously low (< 0.5) - might indicate parsing issue
+            if score_data["overall_score"] < 0.5:
+                console.print(f"[red]  ⚠ {model_short}: {score_data['overall_score']:.2f} [SUSPICIOUSLY LOW] (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/red]")
+                if not enable_debug:
+                    console.print(f"[yellow]    → Set debug_judge_responses=true in config to see raw output[/yellow]")
+            else:
+                console.print(f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/green]")
         else:
             console.print(f"[yellow]  ⚠ {model_short}: no structured score — using fallback parsing[/yellow]")
         
@@ -845,6 +899,122 @@ SUMMARY: [1-2 sentence consensus summary]
                 "weakest_dimension": weakest,
             },
         )
+    
+    async def _chairman_resolve_batch(
+        self,
+        judge_scores: list["BatchJudgeScore"],
+        bsp: str,
+        outputs: list[dict],
+        min_score: float,
+    ) -> "BatchEvaluationResult":
+        """Chairman resolves high disagreement between judges with an LLM call.
+        
+        This method is ONLY invoked when judge variance is high (std > 0.15).
+        Chairman reviews judge scores and provides a final binding verdict.
+        """
+        from rich.console import Console
+        console = Console()
+        
+        # Format judge evaluations for chairman review
+        judge_summary = "\n".join([
+            f"Judge {i+1} ({s.model.split('/')[-1][:20]}): "
+            f"Overall={s.overall_score:.2f}, Role={s.role_adherence:.2f}, "
+            f"Quality={s.response_quality:.2f}, Consistency={s.consistency:.2f}\n"
+            f"  Reasoning: {s.reasoning[:200]}"
+            for i, s in enumerate(judge_scores)
+        ])
+        
+        # Sample outputs for chairman context (limit to 3 for brevity)
+        sample_outputs = self._format_batch_outputs(outputs, max_outputs=3)
+        
+        prompt = f"""You are the chairman of an LLM evaluation council. Your judges have evaluated test outputs but disagree significantly.
+
+BSP (Behavior Specification):
+{bsp[:800]}
+
+JUDGE EVALUATIONS:
+{judge_summary}
+
+SAMPLE TEST OUTPUTS:
+{sample_outputs}
+
+Your task: Review the judges' scores and provide a FINAL BINDING verdict.
+
+Consider:
+- Are the judges' scores reasonable given the BSP requirements?
+- Which judge(s) are being too harsh or too lenient?
+- What is the TRUE quality of these outputs?
+
+Respond in EXACTLY this format:
+FINAL_SCORE: [0.0-1.0]
+CONFIDENCE: [high/medium/low]
+REASONING: [2-3 sentences explaining your decision and which judges you agree/disagree with]
+"""
+        
+        try:
+            result = await self.llm_runner.complete(
+                prompt, 
+                model=self.chairman, 
+                temperature=0,
+                max_tokens=800
+            )
+            
+            # Parse chairman's verdict
+            final_score = None
+            confidence = "medium"
+            reasoning = result.text
+            
+            for line in result.text.split("\n"):
+                if line.startswith("FINAL_SCORE:"):
+                    try:
+                        final_score = float(line.replace("FINAL_SCORE:", "").strip())
+                        final_score = max(0.0, min(1.0, final_score))
+                    except ValueError:
+                        pass
+                elif line.startswith("CONFIDENCE:"):
+                    conf = line.replace("CONFIDENCE:", "").strip().lower()
+                    if conf in ["high", "medium", "low"]:
+                        confidence = conf
+                elif line.startswith("REASONING:"):
+                    reasoning = line.replace("REASONING:", "").strip()
+            
+            # Fallback to weighted average if parsing failed
+            if final_score is None:
+                console.print("[yellow]  ⚠ Chairman response parsing failed - using weighted average[/yellow]")
+                overall_scores = [s.overall_score for s in judge_scores]
+                final_score = sum(overall_scores) / len(overall_scores)
+            
+            console.print(f"[cyan]  ⚖ Chairman verdict: {final_score:.2f} (confidence: {confidence})[/cyan]")
+            
+            # Aggregate recommendations from judges
+            weak_area_counts: dict[str, int] = {}
+            for s in judge_scores:
+                for area in s.weak_areas:
+                    area_normalized = area.strip().lower()
+                    weak_area_counts[area_normalized] = weak_area_counts.get(area_normalized, 0) + 1
+            
+            sorted_areas = sorted(weak_area_counts.items(), key=lambda x: -x[1])
+            recommendations = [area for area, count in sorted_areas if count >= 2]
+            if not recommendations:
+                recommendations = [area for area, _ in sorted_areas[:3]]
+            
+            return BatchEvaluationResult(
+                final_score=round(final_score, 4),
+                passed=final_score >= min_score,
+                confidence=confidence,
+                member_scores=judge_scores,
+                summary=f"Chairman verdict: {reasoning[:150]}",
+                recommendations=recommendations,
+                breakdown={
+                    "chairman_override": True,
+                    "judge_std": round(self._calculate_std([s.overall_score for s in judge_scores]), 4),
+                },
+            )
+            
+        except Exception as e:
+            console.print(f"[red]  ✗ Chairman resolution failed: {str(e)[:60]}[/red]")
+            # Fallback to normal synthesis
+            return self._synthesize_batch_result(judge_scores, min_score)
 
 
 # ============================================================================

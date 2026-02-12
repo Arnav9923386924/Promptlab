@@ -306,6 +306,8 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                     "members": config.council.members,
                     "chairman": config.council.chairman,
                     "mode": config.council.mode,
+                    "use_fixed_judges": config.council.use_fixed_judges,
+                    "debug_judge_responses": config.council.debug_judge_responses,
                 },
                 self.llm_runner,
                 openrouter_api_key=openrouter_key,

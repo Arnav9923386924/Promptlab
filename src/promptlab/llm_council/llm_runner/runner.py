@@ -239,16 +239,35 @@ class LLMRunner:
                             response=response,
                         )
                 
+                # Surface clear auth errors immediately (no retry)
+                if response.status_code == 401:
+                    key_hint = api_key[:12] + "..." if api_key and len(api_key) > 12 else "(empty)"
+                    raise httpx.HTTPStatusError(
+                        f"401 Unauthorized for {provider}/{model}. "
+                        f"API key starts with {key_hint}. "
+                        f"Check that .env has the correct key and no stale env var overrides it.",
+                        request=response.request,
+                        response=response,
+                    )
+                
                 response.raise_for_status()
                 data = response.json()
                 
                 text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 usage = data.get("usage", {})
                 
+                tokens_out = usage.get("completion_tokens", 0)
+                tokens_in = usage.get("prompt_tokens", 0)
+                
+                # Fallback: estimate token count when provider doesn't return usage
+                # (common with OpenRouter free-tier models)
+                if not tokens_out and text:
+                    tokens_out = max(1, len(text) // 4)  # ~4 chars per token estimate
+                
                 return CompletionResult(
                     text=text,
-                    tokens_in=usage.get("prompt_tokens", 0),
-                    tokens_out=usage.get("completion_tokens", 0),
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
                     cost_usd=0.0,
                 )
                 
@@ -401,10 +420,17 @@ class LLMRunner:
         
         usage = data.get("usageMetadata", {})
         
+        tokens_out = usage.get("candidatesTokenCount", 0)
+        tokens_in = usage.get("promptTokenCount", 0)
+        
+        # Fallback: estimate token count when provider doesn't return usage
+        if not tokens_out and text:
+            tokens_out = max(1, len(text) // 4)
+        
         return CompletionResult(
             text=text,
-            tokens_in=usage.get("promptTokenCount", 0),
-            tokens_out=usage.get("candidatesTokenCount", 0),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             cost_usd=0.0,
         )
     
