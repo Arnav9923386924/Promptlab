@@ -17,7 +17,8 @@ console = Console()
 
 
 # How long to consider a model "rate limited" before retrying (seconds)
-RATE_LIMIT_COOLDOWN = 90  # 1.5 minutes
+# Keep short — pool rotation handles failover; long cooldowns just waste time
+RATE_LIMIT_COOLDOWN = 15  # 15 seconds (pool skips to next model instantly)
 
 # Cache lifetime for the model list (seconds)
 MODEL_CACHE_TTL = 600  # 10 minutes

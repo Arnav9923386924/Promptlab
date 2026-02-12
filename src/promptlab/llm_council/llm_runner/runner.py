@@ -373,8 +373,9 @@ class LLMRunner:
             },
         }
         
-        # Retry with exponential backoff on 429 (rate limit)
-        max_retries = 4
+        # Fail-fast on rate limit (429) — let the model pool rotation handle fallback
+        # instead of wasting time retrying the same rate-limited model.
+        max_retries = 1
         base_delay = 2.0
         last_exc = None
         
@@ -388,20 +389,22 @@ class LLMRunner:
                 )
                 
                 if response.status_code == 429:
-                    if attempt < max_retries:
-                        delay = base_delay * (2 ** attempt)
-                        await asyncio.sleep(delay)
-                        continue
-                    response.raise_for_status()
+                    # Fail fast — raise immediately so pool can try next model
+                    raise httpx.HTTPStatusError(
+                        f"Rate limited (429) for google/{model}",
+                        request=response.request,
+                        response=response,
+                    )
                 
                 response.raise_for_status()
                 break
                 
             except httpx.HTTPStatusError as e:
                 last_exc = e
-                if e.response.status_code == 429 and attempt < max_retries:
-                    delay = base_delay * (2 ** attempt)
-                    await asyncio.sleep(delay)
+                if e.response.status_code == 429:
+                    raise  # Don't retry — let pool rotate to next model
+                if attempt < max_retries:
+                    await asyncio.sleep(base_delay)
                     continue
                 raise
         else:

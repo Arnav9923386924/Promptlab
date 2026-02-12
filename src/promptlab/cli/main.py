@@ -797,10 +797,22 @@ def validate_bsp(
             generate_count=target_count,
         )
         
-        return result
+        # If validation failed, ask chairman for BSP improvements (same event loop)
+        bsp_suggestion = None
+        if not result.passed and not ci and validator.council:
+            batch = getattr(validator, '_last_batch', None)
+            council_res = result.council_result
+            if batch and council_res:
+                try:
+                    bsp_suggestion = await validator.get_bsp_improvement(batch, council_res)
+                except Exception as e:
+                    from rich.console import Console as _C
+                    _C().print(f"[yellow]  BSP improvement suggestion failed: {e}[/yellow]")
+        
+        return result, validator, bsp_suggestion
     
     try:
-        result = asyncio.run(run_validation())
+        result, validator, bsp_suggestion = asyncio.run(run_validation())
         
         # Record evaluation history
         from promptlab.utils.history import EvaluationHistory
@@ -896,6 +908,62 @@ def validate_bsp(
                 title="❌ Failed",
                 border_style="red",
             ))
+        
+        # ----------------------------------------------------------------
+        # BSP IMPROVEMENT SUGGESTION (when validation fails, non-CI only)
+        # ----------------------------------------------------------------
+        if not result.passed and not ci and bsp_suggestion:
+            console.print()
+            # Display suggested changes
+            console.print(Panel(
+                "\n".join(f"  • {c}" for c in bsp_suggestion.changes),
+                title="Suggested Changes",
+                border_style="yellow",
+            ))
+            
+            # Show a preview of the improved BSP (first 500 chars)
+            preview = bsp_suggestion.improved_bsp[:500]
+            if len(bsp_suggestion.improved_bsp) > 500:
+                preview += "\n... (truncated)"
+            console.print(Panel(
+                preview,
+                title="Improved BSP Preview",
+                border_style="cyan",
+            ))
+            
+            # Prompt the user
+            bsp_file_path = None
+            if config.bsp and config.bsp.prompt_file:
+                bsp_file_path = cwd / config.bsp.prompt_file
+            
+            if bsp_file_path:
+                update_bsp = typer.confirm(
+                    f"\nWould you like to update {config.bsp.prompt_file} with the improved BSP?",
+                    default=False,
+                )
+                
+                if update_bsp:
+                    # Backup current BSP
+                    backup_path = bsp_file_path.with_suffix(".bsp.bak")
+                    if bsp_file_path.exists():
+                        backup_path.write_text(
+                            bsp_file_path.read_text(encoding="utf-8"),
+                            encoding="utf-8",
+                        )
+                        console.print(f"[dim]  Backed up current BSP to {backup_path.name}[/dim]")
+                    
+                    bsp_file_path.write_text(bsp_suggestion.improved_bsp, encoding="utf-8")
+                    console.print(f"[green]✓ Updated {config.bsp.prompt_file} with improved BSP[/green]")
+                    console.print("[yellow]  Run 'promptlab validate' again to check the new score.[/yellow]")
+                else:
+                    console.print("[dim]Keeping current BSP unchanged.[/dim]")
+            else:
+                console.print("[yellow]  ⚠ BSP is inline (not a file) — cannot auto-update. Copy the improved BSP manually.[/yellow]")
+                console.print(Panel(
+                    bsp_suggestion.improved_bsp,
+                    title="Full Improved BSP (copy this)",
+                    border_style="green",
+                ))
         
         # Exit code for CI
         if ci:

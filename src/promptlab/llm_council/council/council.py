@@ -537,18 +537,28 @@ SUMMARY: [1-2 sentence consensus summary]
             ))
         
         # Check for high judge disagreement BEFORE synthesis
+        # Determine if chairman should synthesize
+        mode = self.mode  # "fast" or "full"
+        
         if len(judge_results) >= 2:
             overall_scores = [s.overall_score for s in judge_results]
             score_std = self._calculate_std(overall_scores)
             if score_std > 0.15:  # High disagreement threshold
                 console.print(f"[yellow]  ⚠ High judge disagreement (σ={score_std:.3f}). Invoking chairman for resolution...[/yellow]")
-                # Use chairman to resolve disagreement
+                final_result = await self._chairman_resolve_batch(judge_results, bsp, outputs, min_score)
+            elif mode == "full":
+                # Full mode: ALWAYS invoke chairman for synthesis even if judges agree
+                console.print(f"[cyan]  ⚖ Full mode: invoking chairman for final synthesis...[/cyan]")
                 final_result = await self._chairman_resolve_batch(judge_results, bsp, outputs, min_score)
             else:
-                # Low disagreement - simple synthesis
+                # Fast mode + low disagreement → simple math synthesis (no extra API call)
                 final_result = self._synthesize_batch_result(judge_results, min_score)
         else:
-            final_result = self._synthesize_batch_result(judge_results, min_score)
+            if mode == "full" and judge_results:
+                console.print(f"[cyan]  ⚖ Full mode: invoking chairman for final synthesis...[/cyan]")
+                final_result = await self._chairman_resolve_batch(judge_results, bsp, outputs, min_score)
+            else:
+                final_result = self._synthesize_batch_result(judge_results, min_score)
         
         pool_info = ""
         if self.model_pool and self.model_pool.initialized:
@@ -1016,6 +1026,162 @@ REASONING: [2-3 sentences explaining your decision and which judges you agree/di
             # Fallback to normal synthesis
             return self._synthesize_batch_result(judge_scores, min_score)
 
+    # ========================================================================
+    # BSP IMPROVEMENT SUGGESTIONS
+    # ========================================================================
+
+    BSP_IMPROVE_PROMPT = """You are an expert prompt engineer. You have evaluated an LLM's outputs against its Behavior Specification Prompt (BSP) and found areas for improvement.
+
+## CURRENT BSP:
+{bsp}
+
+## EVALUATION RESULTS:
+- Overall Score: {score:.2f} / 1.0
+- Role Adherence: {role_adherence:.2f}
+- Response Quality: {response_quality:.2f}
+- Consistency: {consistency:.2f}
+- Constraint Compliance: {constraint_compliance:.2f}
+
+## JUDGE FEEDBACK:
+{judge_feedback}
+
+## WEAK AREAS IDENTIFIED:
+{weak_areas}
+
+## SAMPLE OUTPUTS (showing issues):
+{sample_outputs}
+
+## YOUR TASK:
+1. Analyze WHY the score is low in each weak dimension
+2. Write a COMPLETE improved version of the BSP that addresses ALL issues
+3. The improved BSP should be a drop-in replacement for the current one
+
+Rules for your improved BSP:
+- Keep the same overall structure and role
+- Make rules MORE explicit where constraint compliance is low
+- Add clearer examples where response quality is low
+- Add edge-case handling where consistency is low
+- Be specific — don't just say "be better", show exactly what to change
+- The improved BSP must be complete and self-contained (not a diff/patch)
+
+Respond in EXACTLY this format:
+
+CHANGES:
+- [Change 1: brief description of what changed and why]
+- [Change 2: brief description of what changed and why]
+- [Change 3: brief description of what changed and why]
+
+IMPROVED_BSP_START
+[Your complete improved BSP here — this will be written directly to bsp.txt]
+IMPROVED_BSP_END
+"""
+
+    async def suggest_bsp_improvements(
+        self,
+        current_bsp: str,
+        evaluation_result: "BatchEvaluationResult",
+        sample_outputs: list[dict],
+    ) -> Optional["BSPImprovementSuggestion"]:
+        """Ask the chairman to suggest concrete BSP improvements.
+        
+        Args:
+            current_bsp: Current BSP text
+            evaluation_result: Results from council evaluation
+            sample_outputs: Sample test outputs for context
+            
+        Returns:
+            BSPImprovementSuggestion with changes and improved BSP, or None on failure
+        """
+        from rich.console import Console
+        console = Console()
+        
+        if not self.chairman:
+            console.print("[yellow]  ⚠ No chairman configured — cannot suggest improvements[/yellow]")
+            return None
+        
+        console.print(f"\n[bold cyan]Step 5: Chairman analyzing BSP for improvements...[/bold cyan]")
+        
+        # Aggregate judge feedback
+        judge_feedback = "\n".join([
+            f"- {s.model.split('/')[-1][:25]}: {s.overall_score:.2f} — {s.reasoning[:200]}"
+            for s in evaluation_result.member_scores
+        ])
+        
+        # Aggregate weak areas
+        weak_areas = ", ".join(evaluation_result.recommendations) if evaluation_result.recommendations else "none identified"
+        
+        # Format sample outputs (pick worst-looking ones)
+        formatted_samples = self._format_batch_outputs(sample_outputs, max_outputs=5)
+        
+        # Get dimension scores from breakdown or member_scores
+        breakdown = evaluation_result.breakdown or {}
+        role_adherence = breakdown.get("role_adherence", evaluation_result.final_score)
+        response_quality = breakdown.get("response_quality", evaluation_result.final_score)
+        consistency = breakdown.get("consistency", evaluation_result.final_score)
+        constraint_compliance = breakdown.get("constraint_compliance", evaluation_result.final_score)
+        
+        prompt = self.BSP_IMPROVE_PROMPT.format(
+            bsp=current_bsp,
+            score=evaluation_result.final_score,
+            role_adherence=role_adherence,
+            response_quality=response_quality,
+            consistency=consistency,
+            constraint_compliance=constraint_compliance,
+            judge_feedback=judge_feedback,
+            weak_areas=weak_areas,
+            sample_outputs=formatted_samples,
+        )
+        
+        try:
+            result = await self.llm_runner.complete(
+                prompt,
+                model=self.chairman,
+                temperature=0.3,  # Slight creativity for suggestions
+                max_tokens=4000,
+            )
+            
+            text = result.text
+            
+            # Parse changes list
+            changes: list[str] = []
+            in_changes = False
+            for line in text.split("\n"):
+                stripped = line.strip()
+                if stripped.upper().startswith("CHANGES:"):
+                    in_changes = True
+                    continue
+                if stripped.upper().startswith("IMPROVED_BSP_START"):
+                    in_changes = False
+                    continue
+                if in_changes and stripped.startswith("- "):
+                    changes.append(stripped[2:].strip())
+            
+            # Parse improved BSP
+            improved_bsp = None
+            if "IMPROVED_BSP_START" in text and "IMPROVED_BSP_END" in text:
+                start = text.index("IMPROVED_BSP_START") + len("IMPROVED_BSP_START")
+                end = text.index("IMPROVED_BSP_END")
+                improved_bsp = text[start:end].strip()
+            
+            if not improved_bsp:
+                console.print("[yellow]  ⚠ Chairman did not produce a valid improved BSP[/yellow]")
+                return None
+            
+            if not changes:
+                changes = ["General improvements based on evaluation feedback"]
+            
+            console.print(f"[green]  ✓ Chairman suggested {len(changes)} changes[/green]")
+            
+            return BSPImprovementSuggestion(
+                changes=changes,
+                improved_bsp=improved_bsp,
+                current_score=evaluation_result.final_score,
+            )
+            
+        except Exception as e:
+            console.print(f"[red]  ✗ BSP improvement failed: {str(e)[:80]}[/red]")
+            return None
+
 
 # ============================================================================
 # Batch Evaluation Data Classes
@@ -1042,3 +1208,10 @@ class BatchEvaluationResult(BaseModel):
     summary: str
     recommendations: list[str] = []
     breakdown: dict = {}
+
+
+class BSPImprovementSuggestion(BaseModel):
+    """Suggestion for improving the BSP based on evaluation results."""
+    changes: list[str]
+    improved_bsp: str
+    current_score: float

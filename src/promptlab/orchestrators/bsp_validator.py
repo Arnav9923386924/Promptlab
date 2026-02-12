@@ -686,7 +686,70 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             console.print("[red]  ✗ Could not parse any scores — flagging parse_error[/red]")
         
         return scores
-    
+
+    async def get_bsp_improvement(
+        self,
+        batch: "BatchOutput",
+        council_result: "CouncilBatchResult",
+    ):
+        """Ask the chairman to suggest concrete BSP improvements.
+        
+        Args:
+            batch: The batch of test outputs
+            council_result: Council evaluation result
+            
+        Returns:
+            BSPImprovementSuggestion or None
+        """
+        if not self.council:
+            return None
+        
+        from promptlab.llm_council.council.council import (
+            BatchEvaluationResult,
+            BatchJudgeScore,
+        )
+        
+        # Convert CouncilBatchResult → BatchEvaluationResult for the council method
+        member_scores = [
+            BatchJudgeScore(
+                model=s.get("model", "unknown"),
+                overall_score=s.get("score", 0.5),
+                role_adherence=s.get("role_adherence", 0.5),
+                response_quality=s.get("response_quality", 0.5),
+                consistency=s.get("consistency", 0.5),
+                constraint_compliance=s.get("constraint_compliance", 0.5),
+                reasoning=s.get("reasoning", ""),
+                weak_areas=s.get("weak_areas", []),
+            )
+            for s in council_result.individual_scores
+        ]
+        
+        eval_result = BatchEvaluationResult(
+            final_score=council_result.final_score,
+            passed=council_result.passed,
+            confidence=council_result.confidence,
+            member_scores=member_scores,
+            summary=council_result.summary,
+            recommendations=council_result.recommendations,
+        )
+        
+        # Prepare sample outputs
+        sample_outputs = [
+            {
+                "test_id": out.test_id,
+                "prompt": out.prompt,
+                "response": out.response,
+                "expected": out.expected,
+            }
+            for out in batch.outputs[:10]  # limit to 10 for context window
+        ]
+        
+        return await self.council.suggest_bsp_improvements(
+            current_bsp=self.bsp,
+            evaluation_result=eval_result,
+            sample_outputs=sample_outputs,
+        )
+
     async def validate(
         self,
         test_dir: Optional[Path] = None,
@@ -766,6 +829,7 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         # Step 1: Run tests with BSP
         console.print("\n[bold cyan]Step 1: Running tests with BSP...[/bold cyan]")
         batch = await self.run_tests_with_bsp(files)
+        self._last_batch = batch  # Store for post-validation BSP improvement
         console.print(f"[green]✓ Completed {batch.total_tests} tests[/green]")
         
         # Step 2: Save outputs
