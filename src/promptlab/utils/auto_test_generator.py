@@ -329,18 +329,25 @@ class AutoTestGenerator:
         target_count: int = 50,
         output_dir: Optional[Path] = None,
         output_type: Literal["benchmark", "cloze", "all"] = "all",
+        generation_mode: str = "web",
     ) -> GeneratedTests:
-        """Generate tests automatically from BSP.
+        """Generate tests automatically from BSP with adaptive rounds.
+        
+        Runs multiple scrape-and-extract rounds until `target_count` accepted
+        tests are produced or MAX_ROUNDS is reached.  In "hybrid" mode an
+        additional synthetic-variant pass augments scraped tests.
         
         Args:
             bsp: The Behavior Specification Prompt
-            target_count: Target number of test cases to generate
+            target_count: Target number of accepted test cases
             output_dir: Directory to save generated tests
             output_type: Type of tests to generate
+            generation_mode: "web" (scraping only) or "hybrid" (scraping + synthetic variants)
             
         Returns:
             GeneratedTests object with all generated test data
         """
+        MAX_ROUNDS = 4  # cap to avoid runaway scraping
         start_time = asyncio.get_event_loop().time()
         
         # Step 1: Analyze BSP
@@ -351,8 +358,10 @@ class AutoTestGenerator:
         console.print(f"  [green]✓[/green] Role: {analysis.role[:60]}...")
         console.print(f"  [green]✓[/green] Keywords: {', '.join(analysis.keywords[:5])}")
         console.print(f"  [green]✓[/green] Search queries: {len(analysis.search_queries)}")
+        if generation_mode == "hybrid":
+            console.print(f"  [green]✓[/green] Mode: hybrid (web + synthetic variants)")
         
-        # Step 2: Scrape content
+        # Step 2: Scrape content (adaptive rounds)
         console.print("\n[bold cyan]Step 2/4: Scraping relevant web content...[/bold cyan]")
         
         scraper_config = ScraperConfig(
@@ -362,112 +371,18 @@ class AutoTestGenerator:
         )
         scraper = WebScraper(scraper_config)
         
-        all_content: list[ScrapedContent] = []
-        pages_per_query = max(2, self.max_pages // len(analysis.search_queries))
-        
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                "Searching & scraping...", 
-                total=len(analysis.search_queries)
-            )
-            
-            for query in analysis.search_queries:
-                if len(all_content) >= self.max_pages:
-                    break
-                
-                progress.update(task, description=f"Searching: {query[:40]}...")
-                
-                try:
-                    urls = await scraper.search(query, num_results=pages_per_query + 2, silent=True)
-                    
-                    if urls:
-                        # Filter out already scraped domains for variety
-                        scraped_domains = {
-                            self._get_domain(c.url) for c in all_content
-                        }
-                        urls = [
-                            u for u in urls 
-                            if self._get_domain(u) not in scraped_domains
-                        ][:pages_per_query]
-                        
-                        if urls:
-                            content = await scraper.crawl(
-                                urls, 
-                                max_pages=pages_per_query,
-                                show_progress=False
-                            )
-                            all_content.extend(content)
-                            
-                except Exception as e:
-                    console.print(f"  [yellow]Warning: {e}[/yellow]")
-                
-                progress.advance(task)
-                await asyncio.sleep(0.3)  # Brief pause between queries
-        
-        # If no search results, try direct URLs for common documentation sites
-        if len(all_content) < 3:
-            console.print("[yellow]Search APIs limited. Trying direct documentation URLs...[/yellow]")
-            fallback_urls = self._get_fallback_urls(analysis.domain, analysis.role)
-            if fallback_urls:
-                try:
-                    fallback_content = await scraper.crawl(fallback_urls[:5], show_progress=True)
-                    all_content.extend(fallback_content)
-                except Exception:
-                    pass
-        
-        await scraper.close()
-        
-        if not all_content:
-            raise ValueError("No content could be scraped. Check your search API keys.")
-        
-        console.print(f"  [green]✓[/green] Scraped {len(all_content)} pages")
-        
-        # Step 3: Generate Q&A pairs
-        console.print("\n[bold cyan]Step 3/4: Generating test cases...[/bold cyan]")
-        
         processor = DataProcessor()
         all_qa_pairs: list[QAPair] = []
         all_masked: list[MaskedTest] = []
+        scraped_count = 0
         
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Processing content...", total=len(all_content))
-            
-            for content in all_content:
-                progress.update(
-                    task, 
-                    description=f"Processing: {content.title[:40]}..."
-                )
-                
-                if output_type in ("benchmark", "all"):
-                    qa_pairs = await processor.extract_qa_pairs(content, analysis.domain)
-                    all_qa_pairs.extend(qa_pairs)
-                
-                if output_type in ("cloze", "all"):
-                    masked = await processor.extract_masked_tests(content, analysis.domain)
-                    all_masked.extend(masked)
-                
-                progress.advance(task)
+        # Oversample factor: scrape ~1.5× target to account for dedup losses
+        oversample = int(target_count * 1.5)
         
-        # Deduplicate and limit
-        all_qa_pairs = self._deduplicate_qa(all_qa_pairs)
-        all_masked = self._deduplicate_masked(all_masked)
-        
-        # Calculate how many of each type we need
+        # Calculate per-type targets up front
         if output_type == "all":
-            qa_target = int(target_count * 0.6)  # 60% Q&A
-            masked_target = int(target_count * 0.4)  # 40% cloze
+            qa_target = int(target_count * 0.6)
+            masked_target = target_count - qa_target
         elif output_type == "benchmark":
             qa_target = target_count
             masked_target = 0
@@ -475,18 +390,139 @@ class AutoTestGenerator:
             qa_target = 0
             masked_target = target_count
         
+        queries_used: set[str] = set()
+        scraped_domains: set[str] = set()
+        
+        for round_num in range(1, MAX_ROUNDS + 1):
+            accepted = len(all_qa_pairs) + len(all_masked)
+            if accepted >= target_count:
+                break
+            
+            # Pick queries not yet used; if exhausted, re-use with different page depth
+            remaining_queries = [q for q in analysis.search_queries if q not in queries_used]
+            if not remaining_queries:
+                # Augment queries with round-specific suffixes for variety
+                remaining_queries = [
+                    f"{q} examples round {round_num}"
+                    for q in analysis.search_queries[:4]
+                ]
+            
+            # Scale scraping effort to gap
+            gap = target_count - accepted
+            pages_this_round = max(3, min(self.max_pages, int(gap * 0.4)))
+            pages_per_query = max(2, pages_this_round // max(1, len(remaining_queries)))
+            
+            if round_num > 1:
+                console.print(f"  [cyan]Round {round_num}: need {gap} more tests, scraping {pages_this_round} pages...[/cyan]")
+            
+            round_content: list[ScrapedContent] = []
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task(
+                    "Searching & scraping...", 
+                    total=len(remaining_queries)
+                )
+                
+                for query in remaining_queries:
+                    if len(round_content) >= pages_this_round:
+                        break
+                    queries_used.add(query)
+                    progress.update(task, description=f"Searching: {query[:40]}...")
+                    
+                    try:
+                        urls = await scraper.search(query, num_results=pages_per_query + 2, silent=True)
+                        if urls:
+                            urls = [
+                                u for u in urls 
+                                if self._get_domain(u) not in scraped_domains
+                            ][:pages_per_query]
+                            
+                            if urls:
+                                content = await scraper.crawl(
+                                    urls, 
+                                    max_pages=pages_per_query,
+                                    show_progress=False
+                                )
+                                for c in content:
+                                    scraped_domains.add(self._get_domain(c.url))
+                                round_content.extend(content)
+                    except Exception as e:
+                        console.print(f"  [yellow]Warning: {e}[/yellow]")
+                    
+                    progress.advance(task)
+                    await asyncio.sleep(0.3)
+            
+            # Fallback for first round if search APIs are limited
+            if round_num == 1 and len(round_content) < 3:
+                console.print("[yellow]Search APIs limited. Trying direct documentation URLs...[/yellow]")
+                fallback_urls = self._get_fallback_urls(analysis.domain, analysis.role)
+                if fallback_urls:
+                    try:
+                        fallback_content = await scraper.crawl(fallback_urls[:5], show_progress=True)
+                        round_content.extend(fallback_content)
+                    except Exception:
+                        pass
+            
+            scraped_count += len(round_content)
+            
+            if not round_content:
+                if round_num == 1:
+                    raise ValueError("No content could be scraped. Check your search API keys.")
+                break  # no new content available
+            
+            console.print(f"  [green]✓[/green] Scraped {len(round_content)} pages (total: {scraped_count})")
+            
+            # Step 3 (per round): Extract tests from new content
+            for content in round_content:
+                if output_type in ("benchmark", "all"):
+                    qa_pairs = await processor.extract_qa_pairs(content, analysis.domain)
+                    all_qa_pairs.extend(qa_pairs)
+                if output_type in ("cloze", "all"):
+                    masked = await processor.extract_masked_tests(content, analysis.domain)
+                    all_masked.extend(masked)
+            
+            # Deduplicate after each round
+            all_qa_pairs = self._deduplicate_qa(all_qa_pairs)
+            all_masked = self._deduplicate_masked(all_masked)
+        
+        await scraper.close()
+        
+        # --- Hybrid mode: generate synthetic variants to fill remaining gap ---
+        accepted = len(all_qa_pairs) + len(all_masked)
+        if generation_mode == "hybrid" and accepted < target_count:
+            console.print("\n[bold cyan]Step 3b: Generating synthetic variants (hybrid mode)...[/bold cyan]")
+            gap = target_count - accepted
+            synthetic_qa, synthetic_masked = self._generate_synthetic_variants(
+                all_qa_pairs, all_masked, gap, output_type,
+            )
+            all_qa_pairs.extend(synthetic_qa)
+            all_masked.extend(synthetic_masked)
+            all_qa_pairs = self._deduplicate_qa(all_qa_pairs)
+            all_masked = self._deduplicate_masked(all_masked)
+            console.print(f"  [green]✓[/green] +{len(synthetic_qa)} Q&A variants, +{len(synthetic_masked)} cloze variants")
+        
+        # Trim to target per type
         all_qa_pairs = all_qa_pairs[:qa_target]
         all_masked = all_masked[:masked_target]
         
         total_tests = len(all_qa_pairs) + len(all_masked)
+        console.print(f"\n[bold cyan]Step 3/4: Test generation summary[/bold cyan]")
         console.print(f"  [green]✓[/green] Generated {len(all_qa_pairs)} Q&A tests")
         console.print(f"  [green]✓[/green] Generated {len(all_masked)} cloze tests")
-        console.print(f"  [green]✓[/green] Total: {total_tests} test cases")
+        console.print(f"  [green]✓[/green] Total: {total_tests} / {target_count} requested")
+        
+        if total_tests < target_count:
+            console.print(f"  [yellow]⚠ Could only produce {total_tests} of {target_count} requested tests (limited source material)[/yellow]")
         
         # Step 4: Create YAML output
         console.print("\n[bold cyan]Step 4/4: Creating test file...[/bold cyan]")
         
-        # Build combined YAML
         yaml_content = self._build_yaml(
             analysis.domain,
             all_qa_pairs,
@@ -495,24 +531,20 @@ class AutoTestGenerator:
             analysis,
         )
         
-        # Determine output path
         if output_dir is None:
             output_dir = Path.cwd() / "temp"
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create filename based on domain and timestamp
         domain_slug = analysis.domain.replace(" ", "_").lower()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = output_dir / f"auto_generated_{domain_slug}_{timestamp}.yaml"
         
-        # Save YAML
         with open(output_file, "w", encoding="utf-8") as f:
             yaml.dump(yaml_content, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         
         console.print(f"  [green]✓[/green] Saved to: {output_file}")
         
         end_time = asyncio.get_event_loop().time()
-        generation_time = end_time - start_time
         
         return GeneratedTests(
             domain=analysis.domain,
@@ -520,9 +552,100 @@ class AutoTestGenerator:
             masked_tests=all_masked,
             yaml_content=yaml_content,
             output_file=output_file,
-            generation_time=generation_time,
-            scraped_sources=len(all_content),
+            generation_time=end_time - start_time,
+            scraped_sources=scraped_count,
         )
+    
+    # ------------------------------------------------------------------
+    # Hybrid mode: synthetic variant generation (no LLM call required)
+    # ------------------------------------------------------------------
+    
+    _PARAPHRASE_PREFIXES = [
+        "Explain", "Describe", "What is", "Can you clarify",
+        "Summarize", "Tell me about", "Define", "Elaborate on",
+    ]
+    
+    def _generate_synthetic_variants(
+        self,
+        qa_pairs: list[QAPair],
+        masked_tests: list[MaskedTest],
+        count: int,
+        output_type: str,
+    ) -> tuple[list[QAPair], list[MaskedTest]]:
+        """Create lightweight variants from existing accepted tests.
+        
+        Strategies (all local, no API call):
+        - Rephrase questions using alternate prefixes
+        - Negate constraint tests ("What should you NOT do...")
+        - Insert edge-case qualifiers ("in an unusual situation", "with missing data")
+        """
+        syn_qa: list[QAPair] = []
+        syn_masked: list[MaskedTest] = []
+        
+        edge_qualifiers = [
+            "in an unusual situation",
+            "when data is missing",
+            "under time pressure",
+            "for a beginner",
+            "in a formal context",
+            "with conflicting requirements",
+        ]
+        
+        if output_type in ("benchmark", "all") and qa_pairs:
+            seeds = list(qa_pairs)
+            random.shuffle(seeds)
+            for seed in seeds:
+                if len(syn_qa) >= count:
+                    break
+                # Strategy 1: prefix swap
+                prefix = random.choice(self._PARAPHRASE_PREFIXES)
+                # Strip leading question words from original
+                q = re.sub(r'^(what|how|why|when|where|who|can you|explain|describe|define)\s+', '', seed.question, flags=re.IGNORECASE).strip()
+                new_q = f"{prefix} {q}"
+                if new_q.lower().strip() != seed.question.lower().strip():
+                    syn_qa.append(QAPair(
+                        question=new_q,
+                        answer=seed.answer,
+                        source_url=seed.source_url,
+                        tags=(seed.tags or []) + ["synthetic"],
+                    ))
+                
+                if len(syn_qa) >= count:
+                    break
+                
+                # Strategy 2: edge-case qualifier
+                qualifier = random.choice(edge_qualifiers)
+                syn_qa.append(QAPair(
+                    question=f"{seed.question.rstrip('?')} {qualifier}?",
+                    answer=seed.answer,
+                    source_url=seed.source_url,
+                    tags=(seed.tags or []) + ["synthetic", "edge-case"],
+                ))
+        
+        if output_type in ("cloze", "all") and masked_tests:
+            seeds = list(masked_tests)
+            random.shuffle(seeds)
+            for seed in seeds:
+                if len(syn_masked) >= count:
+                    break
+                # Swap mask position: if the sentence has multiple key terms, mask a different one
+                words = seed.masked_text.replace("___", seed.answer).split()
+                # Pick a different word to mask (min 4 chars, not the original answer)
+                candidates = [w for w in words if len(w) >= 4 and w.lower() != seed.answer.lower()]
+                if candidates:
+                    new_mask_word = random.choice(candidates)
+                    new_text = seed.masked_text.replace("___", seed.answer).replace(new_mask_word, "___", 1)
+                    if "___" in new_text:
+                        syn_masked.append(MaskedTest(
+                            masked_text=new_text,
+                            answer=new_mask_word,
+                            original_text=seed.original_text,
+                            mask_position=0,
+                            source_url=seed.source_url,
+                            tags=(seed.tags or []) + ["synthetic"],
+                        ))
+        
+        return syn_qa[:count], syn_masked[:count]
     
     def _get_domain(self, url: str) -> str:
         """Extract domain from URL."""
@@ -702,6 +825,7 @@ async def generate_tests_from_bsp(
     target_count: int = 50,
     serpapi_key: Optional[str] = None,
     max_pages: int = 20,
+    generation_mode: str = "web",
 ) -> GeneratedTests:
     """Convenience function to generate tests from BSP.
     
@@ -711,13 +835,13 @@ async def generate_tests_from_bsp(
         target_count: Target number of test cases
         serpapi_key: SerpAPI key for better search results
         max_pages: Maximum pages to scrape
+        generation_mode: "web" or "hybrid"
         
     Returns:
         GeneratedTests object
     """
     import os
     
-    # Try to get API key from environment if not provided
     if serpapi_key is None:
         serpapi_key = os.environ.get("SERPAPI_KEY") or os.environ.get("SERPAPI_API_KEY")
     
@@ -730,4 +854,5 @@ async def generate_tests_from_bsp(
         bsp=bsp,
         target_count=target_count,
         output_dir=output_dir,
+        generation_mode=generation_mode,
     )

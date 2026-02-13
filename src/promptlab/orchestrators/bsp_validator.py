@@ -801,6 +801,7 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                     bsp=self.bsp,
                     target_count=generate_count,
                     output_dir=test_dir,
+                    generation_mode=self.config.bsp.generation_mode,
                 )
                 
                 console.print(f"\n[green]✓ Auto-generated {len(generated.qa_pairs) + len(generated.masked_tests)} tests in {generated.generation_time:.1f}s[/green]")

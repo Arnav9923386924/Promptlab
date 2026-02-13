@@ -187,13 +187,18 @@ SUMMARY: [1-2 sentence consensus summary]
         - Tries preferred members first, then discovered free models
         - Automatically skips rate-limited models and tries the next
         - Falls back to config members if pool is unavailable
+        - Collects exactly required_judges successful scores
+        - Fails with clear error if insufficient judges available
         """
         from rich.console import Console
         console = Console()
 
+        # Get required judge count from config
+        required_judges = self.config.get("required_judges", 2)
+        console.print(f"[dim]  🎯 Target: {required_judges} judge scores (required minimum)[/dim]")
+
         # Get judge models from pool (preferred + discovered free models)
         judge_models = await self._get_judge_model_list()
-        target_judges = max(len(self.members), 2)
         
         # STRICT MODE: If use_fixed_judges is True, ONLY try configured members
         # Do NOT fallback to random pool models. This ensures reproducibility.
@@ -202,11 +207,21 @@ SUMMARY: [1-2 sentence consensus summary]
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
         
+        console.print(f"[dim]  📋 Configured members: {len(self.members)}, Available candidates: {len(judge_models)}[/dim]")
+        
         prompt = self.JUDGE_PROMPT.format(criteria=criteria, response=response)
 
         scores = []
+        configured_tried = 0
+        fallback_used = 0
+        
         for model in judge_models:
-            if len(scores) >= target_judges:
+            # Track which models are from config vs fallback
+            is_configured = model in self.members
+            if is_configured:
+                configured_tried += 1
+            
+            if len(scores) >= required_judges:
                 break
             
             try:
@@ -214,6 +229,10 @@ SUMMARY: [1-2 sentence consensus summary]
                 scores.append(score)
                 if self.model_pool:
                     self.model_pool.mark_used(model)
+                
+                if not is_configured:
+                    fallback_used += 1
+                    
             except Exception as e:
                 error_msg = str(e)
                 model_short = model.split('/')[-1][:20]
@@ -226,14 +245,17 @@ SUMMARY: [1-2 sentence consensus summary]
                     console.print(f"[yellow]  ⚠ {model_short} failed: {error_msg[:60]}[/yellow]")
                 continue
 
-        if not scores:
-            console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
-            scores.append(JudgeScore(
-                model="fallback",
-                score=0.5,
-                reasoning="All council judges failed. Score is a fallback placeholder.",
-                passed=False,
-            ))
+        # Check if we met the required minimum
+        if len(scores) < required_judges:
+            console.print(f"[red]  ✗ Insufficient callable judges: got {len(scores)}, required {required_judges}[/red]")
+            if use_fixed_judges:
+                console.print("[yellow]    Tip: Set use_fixed_judges=false to enable fallback to pool models[/yellow]")
+            raise RuntimeError(
+                f"Insufficient callable judges: got {len(scores)}, required {required_judges}. "
+                f"Tried {configured_tried} configured + {len(judge_models) - configured_tried} fallback models."
+            )
+        
+        console.print(f"[green]  ✓ Collected {len(scores)} judge scores ({configured_tried} configured, {fallback_used} fallback)[/green]")
 
         # Variance warning
         if len(scores) >= 2:
@@ -434,6 +456,8 @@ SUMMARY: [1-2 sentence consensus summary]
     # BATCH EVALUATION - Reduces API calls from O(n*m) to O(m)
     # ========================================================================
     
+    CHUNK_SIZE = 25  # max outputs per evaluation chunk
+    
     async def evaluate_batch(
         self,
         outputs: list[dict],
@@ -442,7 +466,128 @@ SUMMARY: [1-2 sentence consensus summary]
     ) -> "BatchEvaluationResult":
         """Evaluate multiple outputs in a SINGLE batch call per judge.
         
+        For large runs (> CHUNK_SIZE), evaluates in chunks and aggregates
+        scores weighted by chunk size so ALL outputs contribute to the
+        final score.
+        
         API call optimization:
+        - Batch: 1 call per judge per chunk (not 1 per test)
+        - Early agreement: if first 2 judges agree (σ < 0.06), skip remaining
+        - Result: typically 2-3 API calls per chunk
+        
+        Args:
+            outputs: List of test outputs [{test_id, prompt, response, expected}, ...]
+            bsp: The Behavior Specification Prompt being evaluated
+            min_score: Minimum score to pass
+            
+        Returns:
+            BatchEvaluationResult with aggregated scores
+        """
+        # Large batch → chunked evaluation path
+        if len(outputs) > self.CHUNK_SIZE:
+            return await self._evaluate_batch_chunked(outputs, bsp, min_score)
+        
+        return await self._evaluate_single_batch(outputs, bsp, min_score)
+    
+    async def _evaluate_batch_chunked(
+        self,
+        outputs: list[dict],
+        bsp: str,
+        min_score: float,
+    ) -> "BatchEvaluationResult":
+        """Evaluate large output sets by splitting into chunks and aggregating.
+        
+        Each chunk is scored independently then aggregated with chunk-size
+        weighting so every output has equal influence on the final score.
+        """
+        from rich.console import Console
+        console = Console()
+        
+        chunks = [
+            outputs[i:i + self.CHUNK_SIZE]
+            for i in range(0, len(outputs), self.CHUNK_SIZE)
+        ]
+        console.print(f"[cyan]  Large batch ({len(outputs)} outputs) → evaluating in {len(chunks)} chunks of ≤{self.CHUNK_SIZE}[/cyan]")
+        
+        chunk_results: list[tuple[int, "BatchEvaluationResult"]] = []
+        
+        for idx, chunk in enumerate(chunks, 1):
+            console.print(f"[cyan]  ── Chunk {idx}/{len(chunks)} ({len(chunk)} outputs) ──[/cyan]")
+            result = await self._evaluate_single_batch(chunk, bsp, min_score)
+            chunk_results.append((len(chunk), result))
+        
+        # Weighted aggregation
+        total_outputs = sum(size for size, _ in chunk_results)
+        
+        # Weighted dimension scores
+        agg = {
+            "role_adherence": 0.0,
+            "response_quality": 0.0,
+            "consistency": 0.0,
+            "constraint_compliance": 0.0,
+        }
+        agg_final = 0.0
+        
+        all_member_scores: list["BatchJudgeScore"] = []
+        all_recommendations: list[str] = []
+        confidences: list[str] = []
+        
+        for size, result in chunk_results:
+            weight = size / total_outputs
+            agg_final += result.final_score * weight
+            for dim in agg:
+                agg[dim] += result.breakdown.get(dim, result.final_score) * weight
+            all_member_scores.extend(result.member_scores)
+            all_recommendations.extend(result.recommendations)
+            confidences.append(result.confidence)
+        
+        # Deduplicate recommendations
+        seen_recs: set[str] = set()
+        unique_recs: list[str] = []
+        for r in all_recommendations:
+            rl = r.strip().lower()
+            if rl not in seen_recs:
+                seen_recs.add(rl)
+                unique_recs.append(r)
+        
+        # Overall confidence: lowest of chunk confidences
+        conf_order = {"low": 0, "medium": 1, "high": 2}
+        overall_confidence = min(confidences, key=lambda c: conf_order.get(c, 0))
+        
+        agg_final = round(agg_final, 4)
+        weakest = min(agg, key=agg.get)
+        
+        summary = (
+            f"Score: {agg_final:.2f} (aggregated from {len(chunks)} chunks) | "
+            f"Role: {agg['role_adherence']:.2f} | Quality: {agg['response_quality']:.2f} | "
+            f"Consistency: {agg['consistency']:.2f} | Constraints: {agg['constraint_compliance']:.2f}"
+        )
+        
+        return BatchEvaluationResult(
+            final_score=agg_final,
+            passed=agg_final >= min_score,
+            confidence=overall_confidence,
+            member_scores=all_member_scores,
+            summary=summary,
+            recommendations=unique_recs[:10],
+            breakdown={
+                "role_adherence": round(agg["role_adherence"], 4),
+                "response_quality": round(agg["response_quality"], 4),
+                "consistency": round(agg["consistency"], 4),
+                "constraint_compliance": round(agg["constraint_compliance"], 4),
+                "weakest_dimension": weakest,
+                "chunks": len(chunks),
+                "total_outputs": total_outputs,
+            },
+        )
+    
+    async def _evaluate_single_batch(
+        self,
+        outputs: list[dict],
+        bsp: str,
+        min_score: float = 0.7,
+    ) -> "BatchEvaluationResult":
+        """Evaluate a single batch of outputs (≤ CHUNK_SIZE).
         - Batch: 1 call per judge (not 1 per test)
         - Early agreement: if first 2 judges agree (σ < 0.06), skip remaining
         - Result: typically 2-3 API calls for full evaluation
@@ -469,7 +614,8 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Get judge models from pool (preferred + discovered free models)
         judge_models = await self._get_judge_model_list()
-        target_judges = max(len(self.members), 2)
+        required_judges = self.config.get("required_judges", 2)
+        console.print(f"[dim]  🎯 Target: {required_judges} judge scores[/dim]")
         
         # STRICT MODE: If use_fixed_judges is True, ONLY try configured members
         # Do NOT fallback to random pool models. This ensures reproducibility.
@@ -478,11 +624,20 @@ SUMMARY: [1-2 sentence consensus summary]
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
         
+        console.print(f"[dim]  📋 Configured: {len(self.members)}, Available: {len(judge_models)}[/dim]")
+        
         # Sequential judging with dynamic fallback and early-agreement optimization
         judge_results: list[BatchJudgeScore] = []
+        configured_tried = 0
+        fallback_used = 0
         
         for model in judge_models:
-            if len(judge_results) >= target_judges:
+            # Track which models are from config vs fallback
+            is_configured = model in self.members
+            if is_configured:
+                configured_tried += 1
+            
+            if len(judge_results) >= required_judges:
                 break
             
             try:
@@ -490,6 +645,9 @@ SUMMARY: [1-2 sentence consensus summary]
                 judge_results.append(score)
                 if self.model_pool:
                     self.model_pool.mark_used(model)
+                
+                if not is_configured:
+                    fallback_used += 1
             except Exception as e:
                 error_msg = str(e)
                 model_short = model.split('/')[-1][:20]
@@ -503,38 +661,35 @@ SUMMARY: [1-2 sentence consensus summary]
                     console.print(f"[red]  ✗ {model_short} failed: {error_msg[:60]}[/red]")
                 continue
             
-            # Early agreement check: if 2+ judges agree closely, skip the rest
-            if len(judge_results) >= 2:
+            # Early agreement check: ONLY after meeting required count
+            if len(judge_results) >= required_judges:
                 scores_so_far = [s.overall_score for s in judge_results]
                 std = self._calculate_std(scores_so_far)
                 if std < 0.06:
-                    console.print(f"[green]  ✓ Early agreement (σ={std:.3f}) — skipping remaining judges[/green]")
+                    console.print(f"[green]  ✓ Early agreement (σ={std:.3f}) after {len(judge_results)} judges[/green]")
                     break
-                elif std > 0.20 and len(judge_results) < target_judges:
-                    # High disagreement - need MORE judges, not fewer
-                    console.print(f"[yellow]  ⚠ High disagreement (σ={std:.3f}) — adding more judges for accuracy[/yellow]")
-                    target_judges = min(target_judges + 1, len(judge_models))  # Add 1 more judge
+            
+            # High disagreement warning (only if we have some results but not at required yet)
+            if 2 <= len(judge_results) < required_judges:
+                scores_so_far = [s.overall_score for s in judge_results]
+                std = self._calculate_std(scores_so_far)
+                if std > 0.20:
+                    console.print(f"[yellow]  ⚠ High disagreement (σ={std:.3f}) — need more judges[/yellow]")
             
             # Brief pause between successful calls (shared API key quota)
             await asyncio.sleep(1.0)
         
-        # Fallback if all failed
-        if not judge_results:
+        # Check if we met the required minimum
+        if len(judge_results) < required_judges:
+            console.print(f"[red]  ✗ Insufficient callable judges: got {len(judge_results)}, required {required_judges}[/red]")
             if use_fixed_judges:
-                console.print("[red]  ✗ All configured judges failed in STRICT mode.[/red]")
                 console.print("[yellow]    Tip: Set use_fixed_judges=false to enable fallback to pool models[/yellow]")
-            else:
-                console.print("[red]  ✗ All judges failed. Returning fallback score.[/red]")
-            judge_results.append(BatchJudgeScore(
-                model="fallback",
-                overall_score=0.5,
-                role_adherence=0.5,
-                response_quality=0.5,
-                consistency=0.5,
-                constraint_compliance=0.5,
-                reasoning="All council judges failed.",
-                weak_areas=[],
-            ))
+            raise RuntimeError(
+                f"Insufficient callable judges: got {len(judge_results)}, required {required_judges}. "
+                f"Tried {configured_tried} configured + {len(judge_models) - configured_tried} fallback models."
+            )
+        
+        console.print(f"[green]  ✓ Collected {len(judge_results)} scores ({configured_tried} configured, {fallback_used} fallback)[/green]")
         
         # Check for high judge disagreement BEFORE synthesis
         # Determine if chairman should synthesize

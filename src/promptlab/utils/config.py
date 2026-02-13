@@ -9,7 +9,7 @@ from typing import Optional
 import os
 import re
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings
 
 try:
@@ -39,6 +39,17 @@ class CouncilConfig(BaseModel):
     chairman: Optional[str] = None
     use_fixed_judges: bool = False
     debug_judge_responses: bool = False
+    required_judges: int = 2  # Minimum number of successful judge scores required
+    
+    @field_validator('required_judges')
+    @classmethod
+    def validate_required_judges(cls, v: int) -> int:
+        if v < 2:
+            raise ValueError(
+                f"council.required_judges must be >= 2 (got {v}). "
+                "Council evaluation requires at least 2 judges for meaningful consensus."
+            )
+        return v
 
 
 class TestingConfig(BaseModel):
@@ -62,6 +73,8 @@ class BSPConfig(BaseModel):
     # Auto-generation settings
     auto_generate: bool = True  # Enable auto test generation via scraping
     auto_generate_count: int = 50  # Number of tests to generate
+    # Generation mode: "web" (scraping only) or "hybrid" (scraping + synthetic variants)
+    generation_mode: str = "web"
 
 
 class BaselineConfig(BaseModel):

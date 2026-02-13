@@ -1,7 +1,29 @@
 # PromptLab Example Configuration
-# Copy this to promptlab.yaml and customize for your setup
+# Copy this to promptlab.yaml and customize for your setup.
+# API keys are loaded from .env file via ${VAR} expansion — never hardcode secrets here.
+#
+# Quick start:
+#   1. Copy this file:      cp promptlab.example.yaml promptlab.yaml
+#   2. Create .env file:    echo "GOOGLE_API_KEY=AIza..." > .env
+#   3. Edit bsp.txt with your prompt behavior rules
+#   4. Run:                 promptlab validate
 version: 1
 
+# =============================================================================
+# BEHAVIOR SPECIFICATION PROMPT (BSP)
+# =============================================================================
+bsp:
+  prompt_file: bsp.txt
+  min_score: 0.7
+  version: "1.0.0"
+  auto_generate: true
+  auto_generate_count: 50
+  # generation_mode: "web" (scraping only) or "hybrid" (scraping + synthetic variants)
+  generation_mode: web
+
+# =============================================================================
+# MODELS
+# =============================================================================
 models:
   # The LLM to test
   default: ollama/llama3.1:8b
@@ -16,25 +38,27 @@ models:
     
     # OpenRouter - Access many models with one key
     # openrouter:
-    #   api_key: sk-or-xxx
+    #   api_key: ${OPENROUTER_API_KEY}
     
     # OpenAI Direct
     # openai:
-    #   api_key: sk-xxx
+    #   api_key: ${OPENAI_API_KEY}
     
     # Anthropic Claude Direct
     # anthropic:
-    #   api_key: sk-ant-xxx
+    #   api_key: ${ANTHROPIC_API_KEY}
     
     # Google Gemini Direct
     # google:
-    #   api_key: AIza-xxx
+    #   api_key: ${GOOGLE_API_KEY}
     
     # xAI Grok Direct
     # xai:
-    #   api_key: xai-xxx
+    #   api_key: ${XAI_API_KEY}
 
-# LLM Council for multi-model evaluation
+# =============================================================================
+# LLM COUNCIL
+# =============================================================================
 council:
   enabled: true
   mode: fast  # Options: full | fast | vote
@@ -42,14 +66,49 @@ council:
     - ollama/llama3.1:8b
     - ollama/llama3.2:3b  # Use any models you have installed
   chairman: ollama/llama3.1:8b  # Makes final decision
+  # Minimum successful judge scores required (default: 2, min: 2)
+  required_judges: 2
+  # Strict mode: only use configured members, no fallback to pool
+  use_fixed_judges: false
+  # Show raw judge responses for debugging
+  debug_judge_responses: false
 
-# Test execution settings
+# =============================================================================
+# BASELINE
+# =============================================================================
+baseline:
+  storage_dir: .promptlab/baselines
+  auto_update: true
+  min_improvement: 0.01
+
+# =============================================================================
+# GIT INTEGRATION
+# =============================================================================
+git:
+  enabled: true
+  branch: null
+  commit_template: "chore: BSP validation passed (score: {score:.2f}, improvement: +{improvement:.2f})"
+  auto_push: false
+
+# =============================================================================
+# TESTING
+# =============================================================================
 testing:
-  parallelism: 4      # Number of parallel tests
-  timeout_ms: 30000   # Test timeout in milliseconds
+  parallelism: 5
+  timeout_ms: 180000
+  retries: 2
 
-# Example model identifiers for each provider:
-# 
+# =============================================================================
+# WEB SCRAPER (for auto-generating test cases)
+# =============================================================================
+scraper:
+  serpapi_key: ${SERPAPI_KEY}
+  max_pages: 10
+  timeout: 30
+
+# =============================================================================
+# MODEL IDENTIFIERS REFERENCE
+# =============================================================================
 # ollama:
 #   - ollama/llama3.1:8b
 #   - ollama/llama3.2:3b
@@ -64,16 +123,14 @@ testing:
 # openai:
 #   - openai/gpt-4o
 #   - openai/gpt-4o-mini
-#   - openai/gpt-3.5-turbo
 #
 # anthropic:
 #   - anthropic/claude-3-5-sonnet-20241022
 #   - anthropic/claude-3-haiku-20240307
 #
 # google:
+#   - google/gemini-2.5-flash
 #   - google/gemini-2.0-flash
-#   - google/gemini-1.5-pro
 #
 # xai:
 #   - xai/grok-2
-#   - xai/grok-beta

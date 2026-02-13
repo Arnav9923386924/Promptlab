@@ -3,6 +3,9 @@
 Fetches available free models from OpenRouter API and Google AI Studio,
 ranks by parameter count, and provides automatic fallback when models get
 rate-limited. Only used for council judges — the chairman stays static.
+
+OpenRouter filtering: Only models with ID ending in `:free` are included.
+Models with pricing==0 but no :free suffix are unreliable (may 402).
 """
 
 import re
@@ -194,7 +197,11 @@ class ModelPool:
         return models
 
     async def _fetch_openrouter_models(self) -> list[FreeModel]:
-        """Fetch and filter free models from OpenRouter /api/v1/models."""
+        """Fetch and filter TRULY FREE models from OpenRouter /api/v1/models.
+        
+        Only includes models with ID ending in `:free`. Models with pricing==0
+        but no :free suffix may still return 402 or be unavailable.
+        """
         async with httpx.AsyncClient(timeout=30.0) as client:
             headers = {}
             if self.openrouter_api_key:
@@ -211,20 +218,17 @@ class ModelPool:
 
         models = []
         for entry in data.get("data", []):
-            pricing = entry.get("pricing", {})
-            prompt_cost = str(pricing.get("prompt", "1"))
-            completion_cost = str(pricing.get("completion", "1"))
-
-            # Only free models (both prompt and completion cost == "0")
-            if prompt_cost != "0" or completion_cost != "0":
+            model_id = entry.get("id", "")
+            if not model_id:
+                continue
+            
+            # STRICT: Only models with :free suffix are truly callable on free tier
+            # Pricing==0 alone is unreliable (may return 402 or be unavailable)
+            if not model_id.endswith(":free"):
                 continue
 
             ctx_len = entry.get("context_length", 0) or 0
             if ctx_len < MIN_CONTEXT_LENGTH:
-                continue
-
-            model_id = entry.get("id", "")
-            if not model_id:
                 continue
 
             models.append(FreeModel(
