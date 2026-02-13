@@ -72,6 +72,12 @@ council:
   use_fixed_judges: false
   # Show raw judge responses for debugging
   debug_judge_responses: false
+  # Console verbosity: show detailed per-model attempts (default: false)
+  verbose_attempts: false
+  # File logging: write detailed judge attempts to .promptlab/runs/ (default: true)
+  log_attempts: true
+  # Custom log file path (auto-generated if null)
+  log_attempts_path: null
 
 # =============================================================================
 # BASELINE

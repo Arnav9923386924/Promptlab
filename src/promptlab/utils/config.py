@@ -40,6 +40,9 @@ class CouncilConfig(BaseModel):
     use_fixed_judges: bool = False
     debug_judge_responses: bool = False
     required_judges: int = 2  # Minimum number of successful judge scores required
+    verbose_attempts: bool = False  # Show detailed per-model attempt logs on console
+    log_attempts: bool = True  # Write detailed attempt logs to file
+    log_attempts_path: Optional[str] = None  # Custom log path (auto-generated if None)
     
     @field_validator('required_judges')
     @classmethod

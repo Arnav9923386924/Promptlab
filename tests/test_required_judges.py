@@ -67,7 +67,7 @@ class TestRequiredJudgesFallback:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         # Mock _get_judge_model_list to return configured + pool models
         async def mock_get_judges():
@@ -112,7 +112,7 @@ class TestRequiredJudgesFallback:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         # Mock scoring: config1 fails, config2 fails
         async def mock_get_judge_score_with_retry(model, prompt):
@@ -145,7 +145,7 @@ class TestInsufficientJudges:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         # Mock _get_judge_model_list to return limited models
         async def mock_get_judges():
@@ -188,7 +188,7 @@ class TestInsufficientJudges:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         # Mock _get_judge_model_list
         async def mock_get_judges():
@@ -225,7 +225,7 @@ class TestEarlyAgreement:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         async def mock_get_judges():
             return ["m1", "m2", "m3", "m4"]
@@ -264,7 +264,7 @@ class TestEarlyAgreement:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         async def mock_get_judges():
             return ["m1", "m2", "m3", "m4", "m5"]
@@ -306,7 +306,7 @@ class TestConfiguredVsFallback:
         }
         
         mock_runner = MagicMock(spec=LLMRunner)
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         
         async def mock_get_judges():
             return ["config1", "config2", "pool1", "pool2"]

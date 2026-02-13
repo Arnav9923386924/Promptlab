@@ -170,7 +170,7 @@ class TestCouncilChunkedEvaluation:
             "chairman": "model-chairman",
             "mode": "fast",
         }
-        council = Council(config, mock_runner)
+        council = Council(config, mock_runner, run_id=None, project_root=None)
         return council
 
     def test_chunk_size_constant(self):

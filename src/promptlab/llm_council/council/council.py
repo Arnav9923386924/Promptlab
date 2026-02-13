@@ -3,9 +3,77 @@
 from typing import Optional, Literal
 from pydantic import BaseModel
 import asyncio
+from pathlib import Path
+from datetime import datetime
 
 from promptlab.llm_council.llm_runner.runner import LLMRunner, CompletionResult
 from promptlab.utils.model_pool import ModelPool
+
+
+class CouncilAttemptsLogger:
+    """Logger for detailed judge attempt tracking (file-based, quiet by default)."""
+    
+    def __init__(self, log_path: Optional[Path] = None, enabled: bool = True):
+        """Initialize attempts logger.
+        
+        Args:
+            log_path: Path to log file (auto-generated if None)
+            enabled: Whether to write logs
+        """
+        self.enabled = enabled
+        self.log_path = log_path
+        
+        if self.enabled and self.log_path:
+            # Ensure parent directory exists
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Write header
+            self._write(f"=== Council Judge Attempts Log ===")
+            self._write(f"Started: {datetime.now().isoformat()}\n")
+    
+    def _write(self, message: str):
+        """Write message to log file."""
+        if not self.enabled or not self.log_path:
+            return
+        try:
+            with open(self.log_path, 'a', encoding='utf-8') as f:
+                f.write(f"{message}\n")
+        except Exception:
+            pass  # Silently ignore logging failures
+    
+    def log_attempt_start(self, model: str, is_configured: bool):
+        """Log a judge model attempt."""
+        source = "configured" if is_configured else "fallback"
+        self._write(f"[ATTEMPT] {model} (source: {source})")
+    
+    def log_success(self, model: str, score: float):
+        """Log successful judge evaluation."""
+        self._write(f"[SUCCESS] {model} → score={score:.3f}")
+    
+    def log_failure(self, model: str, error: str, error_type: str = "unknown"):
+        """Log failed judge evaluation."""
+        self._write(f"[FAILURE] {model} → {error_type}: {error[:200]}")
+    
+    def log_rate_limit(self, model: str):
+        """Log rate limit error."""
+        self._write(f"[RATE_LIMIT] {model} → skipping to next model")
+    
+    def log_fallback_used(self, model: str):
+        """Log fallback model usage."""
+        self._write(f"[FALLBACK] Using pool model: {model}")
+    
+    def log_collection_complete(self, total: int, configured: int, fallback: int):
+        """Log completion of judge collection."""
+        self._write(f"\n[COMPLETE] Collected {total} scores ({configured} configured, {fallback} fallback)")
+    
+    def log_insufficient_judges(self, got: int, required: int, configured_tried: int = 0, total_available: int = 0):
+        """Log insufficient judges error."""
+        self._write(f"[ERROR] Insufficient judges: got {got}, required {required}")
+        if configured_tried > 0 or total_available > 0:
+            self._write(f"        Tried {configured_tried} configured + {total_available - configured_tried} pool models")
+    
+    def log_chunk_start(self, chunk_size: int):
+        """Log batch chunk evaluation start."""
+        self._write(f"\n[CHUNK] Starting batch evaluation (size={chunk_size})")
 
 
 class JudgeScore(BaseModel):
@@ -117,7 +185,9 @@ SUMMARY: [1-2 sentence consensus summary]
 
     def __init__(self, config: dict, llm_runner: LLMRunner,
                  openrouter_api_key: Optional[str] = None,
-                 google_api_key: Optional[str] = None):
+                 google_api_key: Optional[str] = None,
+                 run_id: Optional[str] = None,
+                 project_root: Optional[Path] = None):
         """Initialize council.
         
         Args:
@@ -125,12 +195,37 @@ SUMMARY: [1-2 sentence consensus summary]
             llm_runner: LLM runner instance
             openrouter_api_key: OpenRouter API key for dynamic model pool discovery
             google_api_key: Google AI Studio API key for Gemini model discovery
+            run_id: Unique run identifier for log file naming (auto-generated if None)
+            project_root: Project root directory (for .promptlab/runs/ logs)
         """
         self.config = config
         self.llm_runner = llm_runner
         self.members = config.get("members", [])
         self.chairman = config.get("chairman", self.members[0] if self.members else None)
         self.mode = config.get("mode", "fast")
+        
+        # Initialize attempts logger
+        self.verbose_attempts = config.get("verbose_attempts", False)
+        log_attempts = config.get("log_attempts", True)
+        log_path = config.get("log_attempts_path")
+        
+        # Auto-generate run_id if not provided
+        if not run_id:
+            run_id = f"council_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        if log_attempts:
+            if log_path:
+                self.attempts_logger = CouncilAttemptsLogger(Path(log_path), enabled=True)
+            elif project_root:
+                # Auto-generate log path under .promptlab/runs/
+                runs_dir = project_root / ".promptlab" / "runs"
+                log_file = runs_dir / f"{run_id}_judge_attempts.log"
+                self.attempts_logger = CouncilAttemptsLogger(log_file, enabled=True)
+            else:
+                # No project_root available, disable file logging
+                self.attempts_logger = CouncilAttemptsLogger(enabled=False)
+        else:
+            self.attempts_logger = CouncilAttemptsLogger(enabled=False)
         
         # Dynamic model pool — auto-discovers free models for judges
         # Chairman stays static from config; only judges use the pool
@@ -207,7 +302,8 @@ SUMMARY: [1-2 sentence consensus summary]
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
         
-        console.print(f"[dim]  📋 Configured members: {len(self.members)}, Available candidates: {len(judge_models)}[/dim]")
+        if self.verbose_attempts:
+            console.print(f"[dim]  📋 Configured members: {len(self.members)}, Available candidates: {len(judge_models)}[/dim]")
         
         prompt = self.JUDGE_PROMPT.format(criteria=criteria, response=response)
 
@@ -224,6 +320,10 @@ SUMMARY: [1-2 sentence consensus summary]
             if len(scores) >= required_judges:
                 break
             
+            # Log attempt start to file
+            if self.attempts_logger:
+                self.attempts_logger.log_attempt_start(model, is_configured)
+            
             try:
                 score = await self._get_judge_score_with_retry(model, prompt)
                 scores.append(score)
@@ -232,6 +332,15 @@ SUMMARY: [1-2 sentence consensus summary]
                 
                 if not is_configured:
                     fallback_used += 1
+                
+                # Log success to file
+                if self.attempts_logger:
+                    self.attempts_logger.log_success(model, score.score)
+                
+                # Only show verbose console output if enabled
+                if self.verbose_attempts:
+                    model_short = model.split('/')[-1][:20]
+                    console.print(f"[green]  ✓ {model_short} scored {score.score:.2f}[/green]")
                     
             except Exception as e:
                 error_msg = str(e)
@@ -240,13 +349,30 @@ SUMMARY: [1-2 sentence consensus summary]
                 if self._is_rate_limit_error(error_msg):
                     if self.model_pool:
                         self.model_pool.mark_rate_limited(model)
-                    console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
+                    
+                    # Log rate limit to file
+                    if self.attempts_logger:
+                        self.attempts_logger.log_rate_limit(model)
+                    
+                    # Only show verbose console output if enabled
+                    if self.verbose_attempts:
+                        console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
                 else:
-                    console.print(f"[yellow]  ⚠ {model_short} failed: {error_msg[:60]}[/yellow]")
+                    # Log failure to file
+                    if self.attempts_logger:
+                        self.attempts_logger.log_failure(model, error_msg)
+                    
+                    # Only show verbose console output if enabled
+                    if self.verbose_attempts:
+                        console.print(f"[yellow]  ⚠ {model_short} failed: {error_msg[:60]}[/yellow]")
                 continue
 
         # Check if we met the required minimum
         if len(scores) < required_judges:
+            # Log insufficient judges to file
+            if self.attempts_logger:
+                self.attempts_logger.log_insufficient_judges(len(scores), required_judges, configured_tried, len(judge_models))
+            
             console.print(f"[red]  ✗ Insufficient callable judges: got {len(scores)}, required {required_judges}[/red]")
             if use_fixed_judges:
                 console.print("[yellow]    Tip: Set use_fixed_judges=false to enable fallback to pool models[/yellow]")
@@ -254,6 +380,10 @@ SUMMARY: [1-2 sentence consensus summary]
                 f"Insufficient callable judges: got {len(scores)}, required {required_judges}. "
                 f"Tried {configured_tried} configured + {len(judge_models) - configured_tried} fallback models."
             )
+        
+        # Log collection complete to file
+        if self.attempts_logger:
+            self.attempts_logger.log_collection_complete(len(scores), configured_tried, fallback_used)
         
         console.print(f"[green]  ✓ Collected {len(scores)} judge scores ({configured_tried} configured, {fallback_used} fallback)[/green]")
 
@@ -624,12 +754,17 @@ SUMMARY: [1-2 sentence consensus summary]
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
         
-        console.print(f"[dim]  📋 Configured: {len(self.members)}, Available: {len(judge_models)}[/dim]")
+        if self.verbose_attempts:
+            console.print(f"[dim]  📋 Configured: {len(self.members)}, Available: {len(judge_models)}[/dim]")
         
         # Sequential judging with dynamic fallback and early-agreement optimization
         judge_results: list[BatchJudgeScore] = []
         configured_tried = 0
         fallback_used = 0
+        
+        # Log chunk start to file
+        if self.attempts_logger:
+            self.attempts_logger.log_chunk_start(len(outputs))
         
         for model in judge_models:
             # Track which models are from config vs fallback
@@ -640,6 +775,10 @@ SUMMARY: [1-2 sentence consensus summary]
             if len(judge_results) >= required_judges:
                 break
             
+            # Log attempt start to file
+            if self.attempts_logger:
+                self.attempts_logger.log_attempt_start(model, is_configured)
+            
             try:
                 score = await self._get_batch_judge_score_with_retry(model, prompt)
                 judge_results.append(score)
@@ -648,6 +787,16 @@ SUMMARY: [1-2 sentence consensus summary]
                 
                 if not is_configured:
                     fallback_used += 1
+                
+                # Log success to file
+                if self.attempts_logger:
+                    self.attempts_logger.log_success(model, score.overall_score)
+                
+                # Only show verbose console output if enabled
+                if self.verbose_attempts:
+                    model_short = model.split('/')[-1][:20]
+                    console.print(f"[green]  ✓ {model_short} scored {score.overall_score:.2f}[/green]")
+                    
             except Exception as e:
                 error_msg = str(e)
                 model_short = model.split('/')[-1][:20]
@@ -655,10 +804,23 @@ SUMMARY: [1-2 sentence consensus summary]
                 if self._is_rate_limit_error(error_msg):
                     if self.model_pool:
                         self.model_pool.mark_rate_limited(model)
-                    console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
+                    
+                    # Log rate limit to file
+                    if self.attempts_logger:
+                        self.attempts_logger.log_rate_limit(model)
+                    
+                    # Only show verbose console output if enabled
+                    if self.verbose_attempts:
+                        console.print(f"[yellow]  ⚠ {model_short} rate-limited — trying next model[/yellow]")
                     # No delay — next model has a SEPARATE rate limit
                 else:
-                    console.print(f"[red]  ✗ {model_short} failed: {error_msg[:60]}[/red]")
+                    # Log failure to file
+                    if self.attempts_logger:
+                        self.attempts_logger.log_failure(model, error_msg)
+                    
+                    # Only show verbose console output if enabled
+                    if self.verbose_attempts:
+                        console.print(f"[red]  ✗ {model_short} failed: {error_msg[:60]}[/red]")
                 continue
             
             # Early agreement check: ONLY after meeting required count
@@ -681,6 +843,10 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Check if we met the required minimum
         if len(judge_results) < required_judges:
+            # Log insufficient judges to file
+            if self.attempts_logger:
+                self.attempts_logger.log_insufficient_judges(len(judge_results), required_judges, configured_tried, len(judge_models))
+            
             console.print(f"[red]  ✗ Insufficient callable judges: got {len(judge_results)}, required {required_judges}[/red]")
             if use_fixed_judges:
                 console.print("[yellow]    Tip: Set use_fixed_judges=false to enable fallback to pool models[/yellow]")
@@ -688,6 +854,10 @@ SUMMARY: [1-2 sentence consensus summary]
                 f"Insufficient callable judges: got {len(judge_results)}, required {required_judges}. "
                 f"Tried {configured_tried} configured + {len(judge_models) - configured_tried} fallback models."
             )
+        
+        # Log collection complete to file
+        if self.attempts_logger:
+            self.attempts_logger.log_collection_complete(len(judge_results), configured_tried, fallback_used)
         
         console.print(f"[green]  ✓ Collected {len(judge_results)} scores ({configured_tried} configured, {fallback_used} fallback)[/green]")
         

@@ -306,12 +306,17 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                     "members": config.council.members,
                     "chairman": config.council.chairman,
                     "mode": config.council.mode,
+                    "required_judges": config.council.required_judges,
                     "use_fixed_judges": config.council.use_fixed_judges,
                     "debug_judge_responses": config.council.debug_judge_responses,
+                    "verbose_attempts": config.council.verbose_attempts,
+                    "log_attempts": config.council.log_attempts,
+                    "log_attempts_path": config.council.log_attempts_path,
                 },
                 self.llm_runner,
                 openrouter_api_key=openrouter_key,
                 google_api_key=google_key,
+                project_root=self.project_root,
             )
             
             # Model pool for response generation fallback (same pool as council)
