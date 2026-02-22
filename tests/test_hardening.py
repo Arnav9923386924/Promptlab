@@ -187,6 +187,248 @@ class TestScoreParsing:
 
 
 # ---------------------------------------------------------------------------
+# C2) Council-level score parsing: markdown / format robustness
+# ---------------------------------------------------------------------------
+
+class TestCouncilScoreParsingMarkdown:
+    """Test Council._parse_score_fields with markdown-wrapped responses.
+    
+    This covers the exact issue that step-3.5-flash:free (and other free models)
+    trigger: they wrap output in markdown code fences, bold markers, etc.
+    """
+
+    def _make_council(self):
+        """Create a minimal Council for testing parse methods."""
+        from promptlab.llm_council.council.council import Council
+        from promptlab.llm_council.llm_runner.runner import LLMRunner
+        runner = LLMRunner({"default": "ollama/test", "providers": {}})
+        return Council(
+            {"members": [], "chairman": None, "mode": "fast", "required_judges": 2},
+            runner,
+        )
+
+    def test_sanitize_strips_code_fences(self):
+        c = self._make_council()
+        raw = "```json\nOVERALL_SCORE: 0.8\nROLE_ADHERENCE: 0.7\n```"
+        cleaned = c._sanitize_llm_response(raw)
+        assert "```" not in cleaned
+        assert "OVERALL_SCORE: 0.8" in cleaned
+
+    def test_sanitize_strips_bold_markers(self):
+        c = self._make_council()
+        raw = "**OVERALL_SCORE:** 0.75\n**ROLE_ADHERENCE:** 0.8"
+        cleaned = c._sanitize_llm_response(raw)
+        assert "**" not in cleaned
+        assert "OVERALL_SCORE:" in cleaned
+
+    def test_sanitize_strips_list_prefixes(self):
+        c = self._make_council()
+        raw = "- OVERALL_SCORE: 0.6\n* ROLE_ADHERENCE: 0.7\n1. CONSISTENCY: 0.8"
+        cleaned = c._sanitize_llm_response(raw)
+        for line in cleaned.split("\n"):
+            if line.strip():
+                assert not line.strip().startswith("-")
+                assert not line.strip().startswith("*")
+                assert not line.strip().startswith("1.")
+
+    def test_sanitize_strips_html_tags(self):
+        c = self._make_council()
+        raw = "<b>OVERALL_SCORE:</b> 0.9<br>ROLE_ADHERENCE: 0.85"
+        cleaned = c._sanitize_llm_response(raw)
+        assert "<b>" not in cleaned
+        assert "<br>" not in cleaned
+
+    def test_parse_markdown_code_fenced(self):
+        """step-3.5-flash wraps in code fences — should parse correctly."""
+        c = self._make_council()
+        text = (
+            "Here is my evaluation:\n"
+            "```\n"
+            "OVERALL_SCORE: 0.72\n"
+            "ROLE_ADHERENCE: 0.8\n"
+            "RESPONSE_QUALITY: 0.65\n"
+            "CONSISTENCY: 0.75\n"
+            "CONSTRAINT_COMPLIANCE: 0.68\n"
+            "REASONING: Good overall adherence\n"
+            "WEAK_AREAS: constraint handling\n"
+            "```\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.72
+        assert s["role_adherence"] == 0.8
+        assert s["response_quality"] == 0.65
+        assert s["consistency"] == 0.75
+        assert s["constraint_compliance"] == 0.68
+
+    def test_parse_bold_wrapped_fields(self):
+        """Some models bold the field names — should still parse."""
+        c = self._make_council()
+        text = (
+            "**OVERALL_SCORE:** 0.80\n"
+            "**ROLE_ADHERENCE:** 0.85\n"
+            "**RESPONSE_QUALITY:** 0.75\n"
+            "**CONSISTENCY:** 0.80\n"
+            "**CONSTRAINT_COMPLIANCE:** 0.78\n"
+            "**REASONING:** Well structured responses\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.80
+        assert s["role_adherence"] == 0.85
+
+    def test_parse_list_prefixed_fields(self):
+        """Models sometimes prefix with list markers."""
+        c = self._make_council()
+        text = (
+            "- OVERALL_SCORE: 0.65\n"
+            "- ROLE_ADHERENCE: 0.7\n"
+            "- RESPONSE_QUALITY: 0.6\n"
+            "- CONSISTENCY: 0.65\n"
+            "- CONSTRAINT_COMPLIANCE: 0.6\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.65
+        assert s["role_adherence"] == 0.7
+
+    def test_parse_mixed_markdown(self):
+        """Combination of code fence + bold + list prefix."""
+        c = self._make_council()
+        text = (
+            "My evaluation:\n"
+            "```\n"
+            "- **OVERALL_SCORE:** 0.88\n"
+            "- **ROLE_ADHERENCE:** 0.9\n"
+            "```\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.88
+        assert s["role_adherence"] == 0.9
+
+    def test_parse_plain_text_still_works(self):
+        """Regression: normal well-formatted output must still work."""
+        c = self._make_council()
+        text = (
+            "OVERALL_SCORE: 0.59\n"
+            "ROLE_ADHERENCE: 0.75\n"
+            "RESPONSE_QUALITY: 0.55\n"
+            "CONSISTENCY: 0.7\n"
+            "CONSTRAINT_COMPLIANCE: 0.45\n"
+            "REASONING: The LLM shows moderate adherence\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.59
+        assert s["role_adherence"] == 0.75
+        assert s["constraint_compliance"] == 0.45
+
+    def test_parse_json_object_scores(self):
+        """Many models return JSON instead of key-value lines."""
+        c = self._make_council()
+        text = (
+            "{\n"
+            '  "overall_score": 0.74,\n'
+            '  "role_adherence": 0.8,\n'
+            '  "response_quality": 0.7,\n'
+            '  "consistency": 0.75,\n'
+            '  "constraint_compliance": 0.68,\n'
+            '  "reasoning": "Mostly compliant with minor issues",\n'
+            '  "weak_areas": ["constraint handling"]\n'
+            "}"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.74
+        assert s["role_adherence"] == 0.8
+        assert s["response_quality"] == 0.7
+        assert s["consistency"] == 0.75
+        assert s["constraint_compliance"] == 0.68
+        assert "Mostly compliant" in s["reasoning"]
+        assert s["weak_areas"] == ["constraint handling"]
+
+    def test_parse_compact_shorthand_scores(self):
+        """Compact score formats like R/Q/C/K/O should parse."""
+        c = self._make_council()
+        text = "R:0.8 Q:0.6 C:0.8 K:0.4 O:0.65"
+        s = c._parse_score_fields(text)
+        assert s["role_adherence"] == 0.8
+        assert s["response_quality"] == 0.6
+        assert s["consistency"] == 0.8
+        assert s["constraint_compliance"] == 0.4
+        assert s["overall_score"] == 0.65
+
+    def test_parse_markdown_table_with_percentages(self):
+        """Markdown-table score outputs with percentages should parse."""
+        c = self._make_council()
+        text = (
+            "| field | score |\n"
+            "|---|---|\n"
+            "| Overall Score | 69% |\n"
+            "| Role Adherence | 80% |\n"
+            "| Response Quality | 60% |\n"
+            "| Consistency | 80% |\n"
+            "| Constraint Compliance | 40% |\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.69
+        assert s["role_adherence"] == 0.8
+        assert s["response_quality"] == 0.6
+        assert s["consistency"] == 0.8
+        assert s["constraint_compliance"] == 0.4
+
+    def test_parse_arrow_separator(self):
+        """Arrow separators (→, ->, =>) should be normalised and parsed."""
+        c = self._make_council()
+        text = (
+            "OVERALL_SCORE → 0.77\n"
+            "ROLE_ADHERENCE -> 0.85\n"
+            "RESPONSE_QUALITY => 0.70\n"
+            "CONSISTENCY: 0.80\n"
+            "CONSTRAINT_COMPLIANCE: 0.65\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.77
+        assert s["role_adherence"] == 0.85
+        assert s["response_quality"] == 0.70
+
+    def test_parse_natural_language_scores(self):
+        """Scores embedded in natural language should be caught by regex fallback."""
+        c = self._make_council()
+        text = (
+            "After careful evaluation, I would rate the overall score as 0.72.\n"
+            "The role adherence is 0.80, response quality is 0.65, "
+            "consistency is 0.75, and constraint compliance is 0.68.\n"
+        )
+        s = c._parse_score_fields(text)
+        # The regex fallback should catch these
+        assert s["overall_score"] is not None
+        assert s["role_adherence"] is not None
+
+    def test_dimension_regex_fallback(self):
+        """Dimension-level regex fallback should find scores in prose."""
+        c = self._make_council()
+        text = (
+            "The response shows good role adherence = 0.85 and "
+            "decent consistency = 0.70. Overall score: 0.78"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.78
+        assert s["role_adherence"] == 0.85
+        assert s["consistency"] == 0.70
+
+    def test_parse_scores_out_of_ten(self):
+        """Scores given as X/10 should normalise to 0..1."""
+        c = self._make_council()
+        text = (
+            "OVERALL_SCORE: 7.5/10\n"
+            "ROLE_ADHERENCE: 8/10\n"
+            "RESPONSE_QUALITY: 6/10\n"
+            "CONSISTENCY: 7/10\n"
+            "CONSTRAINT_COMPLIANCE: 5/10\n"
+        )
+        s = c._parse_score_fields(text)
+        assert s["overall_score"] == 0.75
+        assert s["role_adherence"] == 0.8
+        assert s["constraint_compliance"] == 0.5
+
+
+# ---------------------------------------------------------------------------
 # D) Evaluation history write consistency
 # ---------------------------------------------------------------------------
 

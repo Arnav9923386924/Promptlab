@@ -319,11 +319,9 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                 project_root=self.project_root,
             )
             
-            # Model pool for response generation fallback (same pool as council)
-            self.model_pool = ModelPool(
-                openrouter_api_key=openrouter_key or "",
-                google_api_key=google_key or "",
-            )
+            # Model pool for response generation fallback — reuse council's pool
+            # (avoids duplicate API calls to discover free models)
+            self.model_pool = self.council.model_pool
         else:
             self.council = None
             self.model_pool = None

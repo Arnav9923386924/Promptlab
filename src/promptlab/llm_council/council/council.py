@@ -838,8 +838,8 @@ SUMMARY: [1-2 sentence consensus summary]
                 if std > 0.20:
                     console.print(f"[yellow]  ⚠ High disagreement (σ={std:.3f}) — need more judges[/yellow]")
             
-            # Brief pause between successful calls (shared API key quota)
-            await asyncio.sleep(1.0)
+            # No sleep between judge calls — different models have independent
+            # rate limits. Pool rotation handles backoff when needed.
         
         # Check if we met the required minimum
         if len(judge_results) < required_judges:
@@ -982,8 +982,34 @@ SUMMARY: [1-2 sentence consensus summary]
         result = await self.llm_runner.complete(prompt, model=model, temperature=0, max_tokens=1500)
         text = result.text
         
+        # --- Guard: reject empty / whitespace-only responses ---
+        # Models (especially free-tier like step-3.5-flash) sometimes return
+        # empty strings due to content filters, timeouts, or capacity issues.
+        # Treating these as a valid judge with score=0.5 silently drags down
+        # the council average. Instead, raise so the fallback mechanism kicks in.
+        if not text or not text.strip():
+            model_short = model.split('/')[-1][:25]
+            console.print(f"[red]  ✗ {model_short}: empty response — treating as judge failure[/red]")
+            raise RuntimeError(f"Judge {model} returned empty response")
+        
         # Parse all score fields
         score_data = self._parse_score_fields(text)
+        
+        # --- Sanity check: override overall_score if it contradicts dimensions ---
+        # Models sometimes return an OVERALL_SCORE that doesn't match their own
+        # sub-scores (e.g., gemini-2.5-flash: overall=0.41 but R=0.85 Q=0.65 C=0.75).
+        # When the deviation is too large, trust the dimension average instead.
+        _dim_keys = ["role_adherence", "response_quality", "consistency", "constraint_compliance"]
+        _dim_vals = [score_data[k] for k in _dim_keys if score_data.get(k) is not None]
+        if score_data["overall_score"] is not None and len(_dim_vals) >= 2:
+            _dim_avg = sum(_dim_vals) / len(_dim_vals)
+            if abs(score_data["overall_score"] - _dim_avg) > 0.15:
+                console.print(
+                    f"[yellow]  ! Overriding inconsistent overall "
+                    f"{score_data['overall_score']:.2f} -> {_dim_avg:.2f} "
+                    f"(avg of {len(_dim_vals)} dimensions)[/yellow]"
+                )
+                score_data["overall_score"] = round(_dim_avg, 4)
         
         # DEBUG: Log raw response for troubleshooting low scores
         model_short = model.split('/')[-1][:25]
@@ -991,25 +1017,70 @@ SUMMARY: [1-2 sentence consensus summary]
         if enable_debug:
             console.print(f"[dim]  DEBUG {model_short} raw response:[/dim]")
             console.print(f"[dim]{text[:500]}...[/dim]")
+            # Also dump full raw response to file for inspection
+            try:
+                import os
+                debug_dir = os.path.join(os.getcwd(), ".promptlab", "runs")
+                os.makedirs(debug_dir, exist_ok=True)
+                safe_model = model_short.replace(":", "_").replace("/", "_")
+                debug_path = os.path.join(debug_dir, f"debug_raw_{safe_model}.txt")
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(f"=== Raw response from {model} ===\n")
+                    f.write(f"Length: {len(text)} chars\n")
+                    f.write(f"{'='*60}\n")
+                    f.write(text)
+                console.print(f"[dim]    (full response saved to {debug_path})[/dim]")
+            except Exception:
+                pass
         
         # Log concise summary
         if score_data["overall_score"] is not None:
             # Warn if score is suspiciously low (< 0.5) - might indicate parsing issue
             if score_data["overall_score"] < 0.5:
-                console.print(f"[red]  ⚠ {model_short}: {score_data['overall_score']:.2f} [SUSPICIOUSLY LOW] (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/red]")
+                console.print(
+                    f"[red]  ⚠ {model_short}: {score_data['overall_score']:.2f} [SUSPICIOUSLY LOW] "
+                    f"(R:{score_data.get('role_adherence', '?')} "
+                    f"Q:{score_data.get('response_quality', '?')} "
+                    f"C:{score_data.get('consistency', '?')} "
+                    f"K:{score_data.get('constraint_compliance', '?')})[/red]"
+                )
                 if not enable_debug:
-                    console.print(f"[yellow]    → Set debug_judge_responses=true in config to see raw output[/yellow]")
+                    console.print(f"[yellow]    -> Set debug_judge_responses=true in config to see raw output[/yellow]")
             else:
-                console.print(f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} (R:{score_data.get('role_adherence', '?')} Q:{score_data.get('response_quality', '?')} C:{score_data.get('consistency', '?')})[/green]")
+                console.print(
+                    f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} "
+                    f"(R:{score_data.get('role_adherence', '?')} "
+                    f"Q:{score_data.get('response_quality', '?')} "
+                    f"C:{score_data.get('consistency', '?')} "
+                    f"K:{score_data.get('constraint_compliance', '?')})[/green]"
+                )
         else:
-            console.print(f"[yellow]  ⚠ {model_short}: no structured score — using fallback parsing[/yellow]")
+            # Build a summary of what WAS parsed so the user knows what's happening
+            _parsed_dims = {k: score_data[k] for k in ["role_adherence", "response_quality", "consistency", "constraint_compliance"] if score_data.get(k) is not None}
+            if _parsed_dims:
+                _dim_str = " ".join(f"{k[0].upper()}:{v:.2f}" for k, v in _parsed_dims.items())
+                console.print(
+                    f"[yellow]  ⚠ {model_short}: no overall score — deriving from {len(_parsed_dims)} "
+                    f"sub-scores ({_dim_str})[/yellow]"
+                )
+            else:
+                console.print(
+                    f"[red]  ✗ {model_short}: no structured scores found — treating as judge failure[/red]"
+                )
+                raise RuntimeError(
+                    f"Judge {model} returned non-empty response ({len(text)} chars) "
+                    f"but no scores could be parsed"
+                )
         
-        # Fill missing overall score from sub-scores or fallback
+        # Fill missing overall score from sub-scores
+        # (the "no sub-scores AND no overall" case is already handled above as a failure)
         if score_data["overall_score"] is None:
             sub_scores = [score_data[k] for k in ["role_adherence", "response_quality", "consistency", "constraint_compliance"] if score_data.get(k) is not None]
             if sub_scores:
                 score_data["overall_score"] = sum(sub_scores) / len(sub_scores)
             else:
+                # Should be unreachable — we raise above when nothing is parseable.
+                # Defensive fallback just in case.
                 score_data["overall_score"] = self._estimate_score_from_text(text)
         
         # Fill missing sub-scores from overall
@@ -1033,9 +1104,185 @@ SUMMARY: [1-2 sentence consensus summary]
             weak_areas=score_data.get("weak_areas", []),
         )
 
-    def _parse_score_fields(self, text: str) -> dict:
-        """Parse all score fields from response text using multi-strategy approach."""
+    @staticmethod
+    def _sanitize_llm_response(text: str) -> str:
+        """Strip markdown / formatting artifacts so score parsing works on ANY model.
+        
+        Many free-tier models (step-3.5-flash, mixtral, etc.) wrap output in markdown
+        code fences, bold markers, list prefixes, or HTML tags. This normalises the
+        raw response into plain-text lines that the parser can handle reliably.
+        
+        Handles:
+        - Markdown code fences: ```json ... ```, ```text ... ```, ``` ... ```
+        - Bold / italic markers: **text**, *text*, __text__, _text_
+        - List prefixes: - item, * item, 1. item, 1) item
+        - HTML tags: <b>, <br>, <p>, etc.
+        - Leading/trailing whitespace per line
+        """
         import re
+        
+        # 1. Remove markdown code fences (```json, ```text, ```, etc.)
+        #    Keep the content INSIDE the fences
+        text = re.sub(r'```[\w]*\s*\n?', '', text)
+        
+        # 2. Remove bold markdown markers (** only, NOT underscores)
+        #    **bold** → bold — but we KEEP underscores since field names use them
+        #    (e.g., OVERALL_SCORE, ROLE_ADHERENCE)
+        text = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', text)
+        
+        # 3. Remove HTML tags (some models output <br>, <b>, etc.)
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # 3b. Normalise arrow separators (→, ->, =>) to colon
+        text = re.sub(r'\s*(?:→|->|=>)\s*', ': ', text)
+        
+        # 3c. Normalise unicode dashes (em-dash, en-dash) to regular dash
+        text = re.sub(r'[\u2013\u2014]', '-', text)
+        
+        # 4. Normalise each line: strip list prefixes and extra whitespace
+        cleaned_lines = []
+        for line in text.split('\n'):
+            line = line.strip()
+            # Remove list prefixes: "- ", "* ", "1. ", "1) "
+            line = re.sub(r'^(?:\d+[.)]\s*|[-*]\s+)', '', line)
+            cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
+
+    def _parse_score_fields(self, text: str) -> dict:
+        """Parse all score fields from response text using multi-strategy approach.
+        
+        Strategy order:
+        1. Sanitise the raw text (strip markdown, bold, fences, etc.)
+        2. Exact prefix matching on sanitised lines  (most reliable)
+        3. Regex fallback on the ORIGINAL text        (catches odd formats)
+        
+        This is designed to work with ANY model — not just well-behaved ones.
+        """
+        import ast
+        import json
+        import re
+
+        def _normalize_score_value(raw_value: str, raw_denominator: Optional[str] = None) -> Optional[float]:
+            """Normalize score values to a 0..1 range.
+
+            Accepts: 0.73, 73, 73%, 7.3/10, 73/100, 0.73/1.
+            """
+            try:
+                value_text = raw_value.strip()
+                is_percent = value_text.endswith("%")
+                if is_percent:
+                    value_text = value_text[:-1].strip()
+                value = float(value_text)
+            except (ValueError, TypeError, AttributeError):
+                return None
+
+            if raw_denominator:
+                try:
+                    denominator = float(raw_denominator.strip())
+                    if denominator > 0:
+                        value = value / denominator
+                except (ValueError, TypeError):
+                    pass
+            elif is_percent:
+                value = value / 100.0
+            else:
+                if 0 <= value <= 1:
+                    pass
+                elif 1 < value <= 10:
+                    value = value / 10.0
+                elif 10 < value <= 100:
+                    value = value / 100.0
+                else:
+                    return None
+
+            return max(0.0, min(1.0, value))
+
+        def _resolve_field(label: str) -> Optional[str]:
+            """Map flexible label variants to canonical score field names."""
+            if not label:
+                return None
+
+            normalized = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+            if not normalized:
+                return None
+
+            tokens = set(normalized.split())
+            if "r" in tokens:
+                return "role_adherence"
+            if "q" in tokens:
+                return "response_quality"
+            if "o" in tokens:
+                return "overall_score"
+            if "c" in tokens and "compliance" not in tokens and "constraint" not in tokens:
+                return "consistency"
+            if normalized in {"cc", "k"}:
+                return "constraint_compliance"
+
+            if "role" in normalized or "adherence" in normalized:
+                return "role_adherence"
+            if "quality" in normalized:
+                return "response_quality"
+            if "consistency" in normalized or "coherence" in normalized:
+                return "consistency"
+            if (
+                "constraint" in normalized
+                or "compliance" in normalized
+                or "appropriateness" in normalized
+                or normalized.startswith("constraints")
+            ):
+                return "constraint_compliance"
+            if (
+                "overall" in normalized
+                or "final" in normalized
+                or "total" in normalized
+                or "aggregate" in normalized
+                or normalized == "score"
+                or normalized == "rating"
+            ):
+                return "overall_score"
+            return None
+
+        def _extract_json_object_candidates(raw_text: str) -> list[str]:
+            """Extract potential JSON/Python-dict objects from raw text."""
+            candidates: list[str] = []
+
+            fenced_blocks = re.findall(r"```(?:json|JSON)?\s*([\s\S]*?)```", raw_text)
+            candidates.extend([block.strip() for block in fenced_blocks if block.strip()])
+
+            open_idx = raw_text.find("{")
+            close_idx = raw_text.rfind("}")
+            if open_idx != -1 and close_idx != -1 and close_idx > open_idx:
+                candidates.append(raw_text[open_idx:close_idx + 1].strip())
+
+            unique_candidates: list[str] = []
+            seen: set[str] = set()
+            for item in candidates:
+                if item not in seen:
+                    seen.add(item)
+                    unique_candidates.append(item)
+            return unique_candidates
+
+        def _parse_dict_like(candidate: str) -> Optional[dict]:
+            """Parse either strict JSON or python-like dict text."""
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+            try:
+                parsed = ast.literal_eval(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (SyntaxError, ValueError):
+                pass
+
+            return None
+        
+        # --- Step 0: Sanitise before parsing ---
+        sanitized = self._sanitize_llm_response(text)
         
         field_map = {
             "overall_score": ["OVERALL_SCORE", "OVERALL SCORE", "FINAL_SCORE", "FINAL SCORE"],
@@ -1048,25 +1295,110 @@ SUMMARY: [1-2 sentence consensus summary]
         result = {k: None for k in field_map}
         result["reasoning"] = ""
         result["weak_areas"] = []
+
+        # --- Step 1: Parse JSON / dict-like responses first ---
+        for candidate in _extract_json_object_candidates(text):
+            parsed_obj = _parse_dict_like(candidate)
+            if not parsed_obj:
+                continue
+
+            # Handle flat objects and one-level nested "scores"/"breakdown" objects.
+            score_sources = [parsed_obj]
+            for nested_key in ("scores", "score", "breakdown", "dimensions"):
+                nested = parsed_obj.get(nested_key)
+                if isinstance(nested, dict):
+                    score_sources.append(nested)
+
+            for source in score_sources:
+                for raw_key, raw_val in source.items():
+                    field = _resolve_field(str(raw_key))
+                    if field is None:
+                        continue
+                    if isinstance(raw_val, (int, float)):
+                        normalized = _normalize_score_value(str(raw_val))
+                    else:
+                        normalized = _normalize_score_value(str(raw_val))
+                    if normalized is not None:
+                        result[field] = normalized
+
+            raw_reasoning = parsed_obj.get("reasoning") or parsed_obj.get("summary")
+            if raw_reasoning and not result["reasoning"]:
+                result["reasoning"] = str(raw_reasoning).strip()
+
+            raw_weak_areas = (
+                parsed_obj.get("weak_areas")
+                or parsed_obj.get("weak areas")
+                or parsed_obj.get("recommendations")
+            )
+            if raw_weak_areas and not result["weak_areas"]:
+                if isinstance(raw_weak_areas, list):
+                    result["weak_areas"] = [str(a).strip() for a in raw_weak_areas if str(a).strip()]
+                elif isinstance(raw_weak_areas, str):
+                    areas = [a.strip() for a in raw_weak_areas.split(",") if a.strip()]
+                    if raw_weak_areas.lower().strip() != "none":
+                        result["weak_areas"] = areas
         
-        for line in text.split("\n"):
+        # --- Step 2: Line-by-line parsing on sanitized text ---
+        for line in sanitized.split("\n"):
             line_stripped = line.strip()
+            if not line_stripped:
+                continue
             line_upper = line_stripped.upper()
             
             # Parse score fields
             for field, prefixes in field_map.items():
                 for prefix in prefixes:
                     if line_upper.startswith(prefix + ":"):
-                        match = re.search(r'[\d.]+', line_stripped.split(":", 1)[-1])
+                        match = re.search(r"([0-9]+(?:\.[0-9]+)?)(%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?", line_stripped.split(":", 1)[-1])
                         if match:
-                            val = float(match.group())
-                            if 0 <= val <= 1:
-                                result[field] = val
-                            elif 1 < val <= 10:
-                                result[field] = val / 10
-                            elif 10 < val <= 100:
-                                result[field] = val / 100
+                            numerator = match.group(1)
+                            suffix = match.group(2) or ""
+                            denominator = match.group(3)
+                            normalized = _normalize_score_value(numerator + suffix, denominator)
+                            if normalized is not None:
+                                result[field] = normalized
                         break
+
+            # Parse flexible "label: value" variants.
+            # Supports colon, equals, dash, arrow, and natural-language separators.
+            generic_match = re.match(
+                r"^\s*([A-Za-z][A-Za-z _/\-]{1,40})\s*(?::|=|-|(?:is|of)\s)\s*([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?",
+                line_stripped,
+            )
+            if generic_match:
+                raw_label = generic_match.group(1)
+                raw_value = generic_match.group(2)
+                raw_denominator = generic_match.group(3)
+                field = _resolve_field(raw_label)
+                normalized = _normalize_score_value(raw_value, raw_denominator)
+                if field and normalized is not None:
+                    result[field] = normalized
+
+            # Parse markdown table rows, e.g. "| OVERALL_SCORE | 0.74 |".
+            table_match = re.match(
+                r"^\|\s*([A-Za-z][A-Za-z _/\-]{1,40})\s*\|\s*([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?\s*\|?",
+                line_stripped,
+            )
+            if table_match:
+                raw_label = table_match.group(1)
+                raw_value = table_match.group(2)
+                raw_denominator = table_match.group(3)
+                field = _resolve_field(raw_label)
+                normalized = _normalize_score_value(raw_value, raw_denominator)
+                if field and normalized is not None:
+                    result[field] = normalized
+
+            # Parse compact shorthand on one line: "R:0.8 Q:0.6 C:0.8 K:0.4 O:0.65".
+            shorthand_pairs = re.findall(
+                r"\b(R|Q|C|K|CC|O|OVERALL|FINAL|ROLE|QUALITY|CONSISTENCY|CONSTRAINTS?|COMPLIANCE)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?",
+                line_stripped,
+                re.IGNORECASE,
+            )
+            for token, raw_value, raw_denominator in shorthand_pairs:
+                field = _resolve_field(token)
+                normalized = _normalize_score_value(raw_value, raw_denominator)
+                if field and normalized is not None:
+                    result[field] = normalized
             
             # Parse text fields
             if line_upper.startswith("REASONING:"):
@@ -1076,24 +1408,44 @@ SUMMARY: [1-2 sentence consensus summary]
                 if areas.lower() != "none":
                     result["weak_areas"] = [a.strip() for a in areas.split(",") if a.strip()]
         
-        # Regex fallback for overall score if not found
-        if result["overall_score"] is None:
-            patterns = [
-                r'(?:overall|final|total)[\s_]*(?:score)?[\s:=]+([0-9.]+)',
-                r'(?:score|rating)[\s:=]+([0-9.]+)(?:\s*/\s*1)?',
-                r'\b([0-9]\.[0-9]+)\s*/\s*1(?:\.0)?',
-            ]
+        # --- Step 3: Regex fallback on ORIGINAL text (catches unusual formats) ---
+        # Apply to ALL score fields, not just overall_score.
+        # Separators: colon, equals, "is", "as", "of", whitespace
+        _sep = r"[\s:=]+|(?:\s+(?:is|as|of)\s+)"
+        _num = r"([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?"
+        _regex_fallback_map = {
+            "overall_score": [
+                rf"(?:overall|final|total)[\s_]*(?:score)?(?:{_sep}){_num}",
+                rf"(?:score|rating)(?:{_sep}){_num}",
+                r"\b([0-9]+(?:\.[0-9]+)?)\s*/\s*1(?:\.0)?",
+            ],
+            "role_adherence": [
+                rf"(?:role)[\s_]*(?:adherence)?(?:{_sep}){_num}",
+            ],
+            "response_quality": [
+                rf"(?:response|answer)[\s_]*(?:quality)?(?:{_sep}){_num}",
+            ],
+            "consistency": [
+                rf"(?:consistency|coherence)(?:{_sep}){_num}",
+            ],
+            "constraint_compliance": [
+                rf"(?:constraint|compliance|appropriateness)[\s_]*(?:compliance)?(?:{_sep}){_num}",
+            ],
+        }
+
+        for field, patterns in _regex_fallback_map.items():
+            if result[field] is not None:
+                continue
             for pattern in patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
-                    val = float(match.group(1))
-                    if 0 <= val <= 1:
-                        result["overall_score"] = val
+                    raw_value = match.group(1)
+                    raw_denominator = match.group(2) if len(match.groups()) > 1 else None
+                    normalized = _normalize_score_value(raw_value, raw_denominator)
+                    if normalized is not None:
+                        result[field] = normalized
                         break
-                    elif 1 < val <= 10:
-                        result["overall_score"] = val / 10
-                        break
-        
+
         return result
 
     def _estimate_score_from_text(self, text: str) -> float:
