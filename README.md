@@ -173,7 +173,7 @@ promptlab generate-training-data
 
 ---
 
-## ðŸ›ï¸ LLM Council: Multi-Model Evaluation
+## LLM Council: Multi-Model Evaluation
 
 ### Why Council-Based Evaluation?
 
