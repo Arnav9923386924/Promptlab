@@ -16,7 +16,7 @@
 
 ---
 
-## ðŸŽ¯ What is PromptLab?
+## What is PromptLab?
 
 PromptLab is a **CI/CD framework for LLM applications** that provides automated testing and validation for your AI systems. Think of it as GitHub Actions for prompts - every change to your LLM's behavior gets tested automatically before it reaches production.
 
@@ -42,7 +42,7 @@ PromptLab provides:
 
 ---
 
-## âš¡ Quick Start
+## Quick Start
 
 ### Installation
 
@@ -118,7 +118,7 @@ PromptLab provides a comprehensive set of commands:
 
 | Command | Description |
 |---------|-------------|
-| `promptlab init` | **Initialize project** â€” creates all config files, bsp.txt, .gitignore |
+| `promptlab init` | **Initialize project** creates all config files, bsp.txt, .gitignore |
 | `promptlab ci-setup` | Generate GitHub Actions workflow for CI/CD |
 
 ### Validation & Testing
@@ -189,20 +189,20 @@ Inspired by Andrej Karpathy's work on multi-model consensus, PromptLab uses mult
 
 ```
 STAGE 1: Independent Judging
-â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”
-â”‚ Llama  â”‚  â”‚ Gemma  â”‚  â”‚ Mistralâ”‚
-â”‚ 0.82   â”‚  â”‚ 0.75   â”‚  â”‚ 0.78   â”‚
-â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                â”‚
++---------+   +---------+   +---------+
+|  Llama  |   |  Gemma  |   | Mistral |
+|  0.82   |   |  0.75   |   |  0.78   |
++---------+   +---------+   +---------+
+                ↓
 STAGE 2: Cross-Critique (Optional)
 "Judge A's score seems high because..."
-                â”‚
+                ↓
 STAGE 3: Chairman Synthesis
-â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-â”‚ Final Score: 0.78                   â”‚
-â”‚ Confidence: HIGH                    â”‚
-â”‚ Consensus: "Accurate but verbose"   â”‚
-â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
++--------------------------------------+
+| Final Score : 0.78                  |
+| Confidence  : HIGH                  |
+| Consensus   : Accurate but verbose  |
++--------------------------------------+
 ```
 
 #### Stage 1: Independent Judging
@@ -242,7 +242,7 @@ This reduces costs by **50x** and speeds up validation significantly.
 
 ---
 
-## ðŸ” BSP Validation
+## BSP Validation
 
 ### What is a BSP?
 
@@ -385,7 +385,7 @@ Manual generation can be controlled during validation via:
 
 ---
 
-## ðŸš€ CI/CD Integration
+## CI/CD Integration
 
 ### GitHub Actions Setup
 
@@ -429,7 +429,7 @@ Configuration via GitHub Secrets for API keys.
 
 ---
 
-## ðŸŽšï¸ Understanding Council Modes
+## Understanding Council Modes
 
 ### Full Mode
 **Best for**: Critical validations, compliance, production
@@ -454,7 +454,7 @@ Configuration via GitHub Secrets for API keys.
 
 ---
 
-## ðŸ“Š Baseline Tracking
+## Baseline Tracking
 
 ### How It Works
 
@@ -492,7 +492,7 @@ Configuration via GitHub Secrets for API keys.
 
 ---
 
-## ðŸ› ï¸ Provider Support
+## Provider Support
 
 PromptLab works with multiple LLM providers with **automatic fallback**:
 
@@ -533,7 +533,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## ðŸ“¦ Model Recommendations
+## Model Recommendations
 
 ### Development (Free Options)
 
@@ -567,7 +567,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## ðŸ”§ Common Issues & Solutions
+## Common Issues & Solutions
 
 ### Rate Limiting
 **Symptom**: 429 errors, "Rate limited after 5 retries"
@@ -620,7 +620,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## ðŸ“ˆ Best Practices
+## Best Practices
 
 ### Development Workflow
 1. Start with local Ollama to avoid costs
@@ -666,38 +666,38 @@ Switch providers without code changes via configuration.
 
 ---
 
-## ðŸš€ Roadmap
+## Roadmap
 
 **Completed**
-- âœ… Core framework with multi-provider support
-- âœ… Council evaluation with batch processing
-- âœ… Web scraping and auto-test generation
-- âœ… Baseline tracking and git integration
-- âœ… GitHub Actions CI/CD workflows
-- âœ… BSP validation workflow
-- âœ… Google AI Studio integration (FREE, 15 RPM)
-- âœ… Dynamic model pool with auto-discovery
-- âœ… Intelligent model fallback (cross-provider)
-- âœ… BSP linting for quality checks
-- âœ… Adversarial guardrail testing
-- âœ… BSP optimization with AI feedback
-- âœ… Evaluation history tracking
+- Core framework with multi-provider support
+- Council evaluation with batch processing
+- Web scraping and auto-test generation
+- Baseline tracking and git integration
+- GitHub Actions CI/CD workflows
+- BSP validation workflow
+- Google AI Studio integration (FREE, 15 RPM)
+- Dynamic model pool with auto-discovery
+- Intelligent model fallback (cross-provider)
+- BSP linting for quality checks
+- Adversarial guardrail testing
+- BSP optimization with AI feedback
+- Evaluation history tracking
 
 **In Progress**
-- ðŸ”„ VS Code extension for integrated testing
-- ðŸ”„ Production log capture and replay
-- ðŸ”„ HuggingFace benchmark integration
+- VS Code extension for integrated testing
+- Production log capture and replay
+- HuggingFace benchmark integration
 
 **Planned**
-- ðŸ“‹ Visual dashboard for score analytics
-- ðŸ“‹ Slack/Discord notifications
-- ðŸ“‹ Advanced insights and recommendations
-- ðŸ“‹ Cost optimization suggestions
-- ðŸ“‹ Multi-language support
+- Visual dashboard for score analytics
+- Slack/Discord notifications
+- Advanced insights and recommendations
+- Cost optimization suggestions
+- Multi-language support
 
 ---
 
-## ðŸ¤ Contributing
+## Contributing
 
 PromptLab is open source and welcomes contributions!
 
