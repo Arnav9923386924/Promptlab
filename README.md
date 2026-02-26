@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="logo.png" alt="PromptLab" width="400">
 </p>
 
@@ -16,7 +16,7 @@
 
 ---
 
-## 🎯 What is PromptLab?
+## ðŸŽ¯ What is PromptLab?
 
 PromptLab is a **CI/CD framework for LLM applications** that provides automated testing and validation for your AI systems. Think of it as GitHub Actions for prompts - every change to your LLM's behavior gets tested automatically before it reaches production.
 
@@ -42,7 +42,7 @@ PromptLab provides:
 
 ---
 
-## ⚡ Quick Start
+## âš¡ Quick Start
 
 ### Installation
 
@@ -65,11 +65,11 @@ pip install -e .
    promptlab init
    ```
    Creates complete project structure:
-   - `promptlab.yaml` — main configuration
-   - `bsp.txt` — behavior specification template
-   - `.gitignore` — PromptLab patterns
-   - `temp/example.yaml` — example test suite
-   - `.promptlab/` — baseline storage
+   - `promptlab.yaml` â€” main configuration
+   - `bsp.txt` â€” behavior specification template
+   - `.gitignore` â€” PromptLab patterns
+   - `temp/example.yaml` â€” example test suite
+   - `.promptlab/` â€” baseline storage
 
 2. **Choose Provider** (interactive or quick setup)
    ```bash
@@ -91,11 +91,26 @@ pip install -e .
    promptlab validate
    ```
 
+   Useful validation options:
+   ```bash
+   # Generate a specific number of tests before validating
+   promptlab validate --generate 100
+
+   # Disable auto-generation and require existing tests
+   promptlab validate --no-generate
+
+   # CI-friendly exit codes
+   promptlab validate --ci
+
+   # Write validation result to JSON
+   promptlab validate --output result.json
+   ```
+
 That's it! Your first validation runs automatically with intelligent model fallback.
 
 ---
 
-## 🖥️ CLI Commands
+## CLI Commands
 
 PromptLab provides a comprehensive set of commands:
 
@@ -103,7 +118,7 @@ PromptLab provides a comprehensive set of commands:
 
 | Command | Description |
 |---------|-------------|
-| `promptlab init` | **Initialize project** — creates all config files, bsp.txt, .gitignore |
+| `promptlab init` | **Initialize project** â€” creates all config files, bsp.txt, .gitignore |
 | `promptlab ci-setup` | Generate GitHub Actions workflow for CI/CD |
 
 ### Validation & Testing
@@ -120,6 +135,13 @@ PromptLab provides a comprehensive set of commands:
 |---------|-------------|
 | `promptlab optimize-bsp` | Iteratively improve BSP using AI + linting feedback |
 | `promptlab history` | View evaluation history and score trends (FREE) |
+
+### Conversation & Data
+
+| Command | Description |
+|---------|-------------|
+| `promptlab evaluate-conversation` | Evaluate multi-turn conversation quality and drift |
+| `promptlab generate-training-data` | Generate fine-tuning datasets from BSP and outputs |
 
 ### Examples
 
@@ -141,11 +163,17 @@ promptlab guardrail
 
 # Optimize BSP with AI feedback
 promptlab optimize-bsp
+
+# Evaluate multi-turn conversation quality
+promptlab evaluate-conversation
+
+# Generate fine-tuning data from outputs
+promptlab generate-training-data
 ```
 
 ---
 
-## 🏛️ LLM Council: Multi-Model Evaluation
+## ðŸ›ï¸ LLM Council: Multi-Model Evaluation
 
 ### Why Council-Based Evaluation?
 
@@ -161,20 +189,20 @@ Inspired by Andrej Karpathy's work on multi-model consensus, PromptLab uses mult
 
 ```
 STAGE 1: Independent Judging
-┌────────┐  ┌────────┐  ┌────────┐
-│ Llama  │  │ Gemma  │  │ Mistral│
-│ 0.82   │  │ 0.75   │  │ 0.78   │
-└────────┘  └────────┘  └────────┘
-                │
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Llama  â”‚  â”‚ Gemma  â”‚  â”‚ Mistralâ”‚
+â”‚ 0.82   â”‚  â”‚ 0.75   â”‚  â”‚ 0.78   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â”‚
 STAGE 2: Cross-Critique (Optional)
 "Judge A's score seems high because..."
-                │
+                â”‚
 STAGE 3: Chairman Synthesis
-┌─────────────────────────────────────┐
-│ Final Score: 0.78                   │
-│ Confidence: HIGH                    │
-│ Consensus: "Accurate but verbose"   │
-└─────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Final Score: 0.78                   â”‚
+â”‚ Confidence: HIGH                    â”‚
+â”‚ Consensus: "Accurate but verbose"   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 #### Stage 1: Independent Judging
@@ -205,16 +233,16 @@ A designated "chairman" model reviews all scores and critiques, then produces:
 ### Batch Evaluation Optimization
 
 Traditional approach: Evaluate each test individually
-- 50 tests × 3 council members = **150 API calls** ❌
+- 50 tests Ã— 3 council members = **150 API calls** âŒ
 
 PromptLab's approach: Batch evaluation
-- Submit all 50 outputs once to each judge = **3 API calls** ✅
+- Submit all 50 outputs once to each judge = **3 API calls** âœ…
 
 This reduces costs by **50x** and speeds up validation significantly.
 
 ---
 
-## 🔍 BSP Validation
+## ðŸ” BSP Validation
 
 ### What is a BSP?
 
@@ -229,20 +257,20 @@ A **Behavior Specification Prompt (BSP)** is your LLM's system prompt - the inst
 
 ```
 1. Load BSP from config/file
-   ↓
+   ->
 2. Check for existing tests
-   ↓
-3. If no tests → Auto-generate via web scraping
-   ↓
+   ->
+3. If no tests -> Auto-generate via web scraping
+   ->
 4. Run all tests with BSP prepended
-   ↓
-5. Collect outputs → Batch file
-   ↓
+   ->
+5. Collect outputs -> Batch file
+   ->
 6. Submit to LLM Council for evaluation
-   ↓
+   ->
 7. Compare score with baseline
-   ↓
-8. If improved → Update baseline → Commit → Push
+   ->
+8. If improved -> Update baseline -> Commit -> Push
 ```
 
 ### Configuration Structure
@@ -289,7 +317,7 @@ BSP validation uses `promptlab.yaml` configuration with these key sections:
 
 ---
 
-## 🌐 Web Scraping & Test Generation
+## Web Scraping & Test Generation
 
 ### Automatic Test Generation
 
@@ -299,11 +327,11 @@ PromptLab eliminates manual test writing through intelligent web scraping and te
 
 When you run validation without existing tests:
 
-1. **BSP Analysis** → Extracts domain, keywords, capabilities
-2. **Query Generation** → Creates targeted search queries
-3. **Web Scraping** → Fetches relevant content
-4. **Content Parsing** → Extracts facts and Q&A pairs
-5. **Test Creation** → Generates YAML test files
+1. **BSP Analysis** -> Extracts domain, keywords, capabilities
+2. **Query Generation** -> Creates targeted search queries
+3. **Web Scraping** -> Fetches relevant content
+4. **Content Parsing** -> Extracts facts and Q&A pairs
+5. **Test Creation** -> Generates YAML test files
 
 ### Technology Stack
 
@@ -317,18 +345,18 @@ When you run validation without existing tests:
 ### Hybrid Scraping Approach
 
 ```
-1. Try httpx (fast) → 2. Detect JS needs → 3. Fallback to Playwright
+1. Try httpx (fast) -> 2. Detect JS needs -> 3. Fallback to Playwright
 ```
 
 ### Search Provider Options
 
 | Provider | Auth | Rate Limits | Quality |
 |----------|------|-------------|---------|
-| SerpAPI | Free API key | 100/month | ⭐⭐⭐⭐⭐ |
-| SearXNG | None | Unlimited | ⭐⭐⭐⭐ |
-| Brave | Credit card | 2,000/month | ⭐⭐⭐⭐ |
-| DuckDuckGo | None | Sometimes limited | ⭐⭐⭐ |
-| Google Scrape | None | Often blocked | ⭐⭐ |
+| SerpAPI | Free API key | 100/month | â­â­â­â­â­ |
+| SearXNG | None | Unlimited | â­â­â­â­ |
+| Brave | Credit card | 2,000/month | â­â­â­â­ |
+| DuckDuckGo | None | Sometimes limited | â­â­â­ |
+| Google Scrape | None | Often blocked | â­â­ |
 
 **Recommendation**: SerpAPI for best results (free tier available)
 
@@ -351,14 +379,13 @@ Auto-scraping triggers when:
 - `bsp.auto_generate` enabled
 - BSP file present
 
-Manual scraping available via `promptlab scrape` command for:
-- Specific subtopics
-- Additional coverage
-- Preview before validation
+Manual generation can be controlled during validation via:
+- `promptlab validate --generate 100` (or any target count)
+- `promptlab validate --no-generate` to skip generation
 
 ---
 
-## 🚀 CI/CD Integration
+## ðŸš€ CI/CD Integration
 
 ### GitHub Actions Setup
 
@@ -402,32 +429,32 @@ Configuration via GitHub Secrets for API keys.
 
 ---
 
-## 🎚️ Understanding Council Modes
+## ðŸŽšï¸ Understanding Council Modes
 
 ### Full Mode
 **Best for**: Critical validations, compliance, production
 
-**Process**: Independent judging → Cross-critique → Chairman synthesis
+**Process**: Independent judging â†’ Cross-critique â†’ Chairman synthesis
 
 **Tradeoffs**: Most accurate, slowest, highest cost
 
 ### Fast Mode (Recommended)
 **Best for**: Regular development, CI/CD, iterative testing
 
-**Process**: Independent judging → Chairman synthesis
+**Process**: Independent judging â†’ Chairman synthesis
 
 **Tradeoffs**: Good accuracy, reasonable speed, moderate cost
 
 ### Vote Mode
 **Best for**: Quick checks, sanity testing, prototyping
 
-**Process**: Independent judging → Majority vote
+**Process**: Independent judging â†’ Majority vote
 
 **Tradeoffs**: Fastest, cheapest, less nuanced
 
 ---
 
-## 📊 Baseline Tracking
+## ðŸ“Š Baseline Tracking
 
 ### How It Works
 
@@ -465,7 +492,7 @@ Configuration via GitHub Secrets for API keys.
 
 ---
 
-## 🛠️ Provider Support
+## ðŸ› ï¸ Provider Support
 
 PromptLab works with multiple LLM providers with **automatic fallback**:
 
@@ -493,7 +520,7 @@ When a model gets rate-limited, PromptLab automatically:
 3. Uses models from other configured providers
 
 ```yaml
-# promptlab.yaml — configure multiple providers
+# promptlab.yaml â€” configure multiple providers
 models:
   providers:
     google:
@@ -506,7 +533,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## 📦 Model Recommendations
+## ðŸ“¦ Model Recommendations
 
 ### Development (Free Options)
 
@@ -540,7 +567,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## 🔧 Common Issues & Solutions
+## ðŸ”§ Common Issues & Solutions
 
 ### Rate Limiting
 **Symptom**: 429 errors, "Rate limited after 5 retries"
@@ -593,7 +620,7 @@ Switch providers without code changes via configuration.
 
 ---
 
-## 📈 Best Practices
+## ðŸ“ˆ Best Practices
 
 ### Development Workflow
 1. Start with local Ollama to avoid costs
@@ -639,38 +666,38 @@ Switch providers without code changes via configuration.
 
 ---
 
-## 🚀 Roadmap
+## ðŸš€ Roadmap
 
 **Completed**
-- ✅ Core framework with multi-provider support
-- ✅ Council evaluation with batch processing
-- ✅ Web scraping and auto-test generation
-- ✅ Baseline tracking and git integration
-- ✅ GitHub Actions CI/CD workflows
-- ✅ BSP validation workflow
-- ✅ Google AI Studio integration (FREE, 15 RPM)
-- ✅ Dynamic model pool with auto-discovery
-- ✅ Intelligent model fallback (cross-provider)
-- ✅ BSP linting for quality checks
-- ✅ Adversarial guardrail testing
-- ✅ BSP optimization with AI feedback
-- ✅ Evaluation history tracking
+- âœ… Core framework with multi-provider support
+- âœ… Council evaluation with batch processing
+- âœ… Web scraping and auto-test generation
+- âœ… Baseline tracking and git integration
+- âœ… GitHub Actions CI/CD workflows
+- âœ… BSP validation workflow
+- âœ… Google AI Studio integration (FREE, 15 RPM)
+- âœ… Dynamic model pool with auto-discovery
+- âœ… Intelligent model fallback (cross-provider)
+- âœ… BSP linting for quality checks
+- âœ… Adversarial guardrail testing
+- âœ… BSP optimization with AI feedback
+- âœ… Evaluation history tracking
 
 **In Progress**
-- 🔄 VS Code extension for integrated testing
-- 🔄 Production log capture and replay
-- 🔄 HuggingFace benchmark integration
+- ðŸ”„ VS Code extension for integrated testing
+- ðŸ”„ Production log capture and replay
+- ðŸ”„ HuggingFace benchmark integration
 
 **Planned**
-- 📋 Visual dashboard for score analytics
-- 📋 Slack/Discord notifications
-- 📋 Advanced insights and recommendations
-- 📋 Cost optimization suggestions
-- 📋 Multi-language support
+- ðŸ“‹ Visual dashboard for score analytics
+- ðŸ“‹ Slack/Discord notifications
+- ðŸ“‹ Advanced insights and recommendations
+- ðŸ“‹ Cost optimization suggestions
+- ðŸ“‹ Multi-language support
 
 ---
 
-## 🤝 Contributing
+## ðŸ¤ Contributing
 
 PromptLab is open source and welcomes contributions!
 
@@ -690,3 +717,4 @@ See `CONTRIBUTING.md` for guidelines.
   <b>Stop testing prompts manually. Start shipping with confidence.</b><br>
   <sub>PromptLab: CI/CD for the LLM era</sub>
 </p>
+
