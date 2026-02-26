@@ -256,21 +256,14 @@ A **Behavior Specification Prompt (BSP)** is your LLM's system prompt - the inst
 ### BSP Validation Workflow
 
 ```
-1. Load BSP from config/file
-   ->
+1. Load BSP from config
 2. Check for existing tests
-   ->
-3. If no tests -> Auto-generate via web scraping
-   ->
-4. Run all tests with BSP prepended
-   ->
-5. Collect outputs -> Batch file
-   ->
-6. Submit to LLM Council for evaluation
-   ->
-7. Compare score with baseline
-   ->
-8. If improved -> Update baseline -> Commit -> Push
+3. If none → Auto-generate
+4. Run tests with BSP
+5. Collect outputs
+6. Submit to LLM Council
+7. Compare with baseline
+8. Update if improved
 ```
 
 ### Configuration Structure
