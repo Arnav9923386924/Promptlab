@@ -76,8 +76,21 @@ class BSPConfig(BaseModel):
     # Auto-generation settings
     auto_generate: bool = True  # Enable auto test generation via scraping
     auto_generate_count: int = 50  # Number of tests to generate
-    # Generation mode: "web" (scraping only) or "hybrid" (scraping + synthetic variants)
+    # Generation mode: "web" | "docs_web" | "hybrid"
+    #   web      — scrape + regex extract (original pipeline)
+    #   docs_web — download docs → TF-IDF index → retrieve → LLM/heuristic gen
+    #   hybrid   — docs_web first, web fallback if target not met
     generation_mode: str = "web"
+
+
+class DocsWebConfig(BaseModel):
+    """Configuration for the document-grounded (docs_web) generation pipeline."""
+    max_docs: int = 20          # Max documents to download
+    chunk_size: int = 800       # Chunk size in words for indexing
+    chunk_overlap: int = 200    # Overlap in words between consecutive chunks
+    retrieval_top_k: int = 10   # Top-K chunks per retrieval query
+    target_count: int = 100     # Default target number of testcases
+    llm_model: Optional[str] = None  # Override model for testcase generation (uses models.default if None)
 
 
 class BaselineConfig(BaseModel):
@@ -151,6 +164,7 @@ class PromptLabConfig(BaseModel):
     baseline: BaselineConfig = BaselineConfig()
     git: GitConfig = GitConfig()
     scraper: ScraperConfig = ScraperConfig()
+    docs_web: DocsWebConfig = DocsWebConfig()
     guardrail: GuardrailConfig = GuardrailConfig()
     optimizer: OptimizerConfig = OptimizerConfig()
     multi_turn: MultiTurnConfig = MultiTurnConfig()

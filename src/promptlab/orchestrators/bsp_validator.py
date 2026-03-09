@@ -794,20 +794,53 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                 
                 # Get API keys from config
                 serpapi_key = self.config.scraper.serpapi_key if self.config.scraper else None
+                brave_api_key = self.config.scraper.brave_api_key if self.config.scraper else None
+                gen_mode = self.config.bsp.generation_mode
+                
+                # Build LLM runner for docs_web/hybrid modes
+                llm_runner = None
+                llm_model = self.config.models.default
+                if gen_mode in ("docs_web", "hybrid"):
+                    try:
+                        from promptlab.llm_council.llm_runner.runner import LLMRunner
+                        runner_cfg = {
+                            "default": self.config.docs_web.llm_model or self.config.models.default,
+                            "providers": {
+                                name: {"endpoint": p.endpoint, "api_key": p.api_key}
+                                for name, p in self.config.models.providers.items()
+                            } if self.config.models.providers else {},
+                        }
+                        llm_runner = LLMRunner(runner_cfg)
+                        llm_model = runner_cfg["default"]
+                    except Exception:
+                        pass
                 
                 generator = AutoTestGenerator(
                     serpapi_key=serpapi_key,
-                    max_pages=20,
+                    brave_api_key=brave_api_key,
+                    max_pages=self.config.scraper.max_pages if self.config.scraper else 20,
+                    project_root=test_dir.parent,
+                    llm_runner=llm_runner,
+                    llm_model=llm_model,
+                    max_docs=self.config.docs_web.max_docs,
+                    chunk_size=self.config.docs_web.chunk_size,
+                    chunk_overlap=self.config.docs_web.chunk_overlap,
+                    retrieval_top_k=self.config.docs_web.retrieval_top_k,
                 )
                 
                 generated = await generator.generate_tests(
                     bsp=self.bsp,
                     target_count=generate_count,
                     output_dir=test_dir,
-                    generation_mode=self.config.bsp.generation_mode,
+                    generation_mode=gen_mode,
                 )
                 
-                console.print(f"\n[green]✓ Auto-generated {len(generated.qa_pairs) + len(generated.masked_tests)} tests in {generated.generation_time:.1f}s[/green]")
+                total_gen = (
+                    len(generated.generated_cases)
+                    + len(generated.qa_pairs)
+                    + len(generated.masked_tests)
+                )
+                console.print(f"\n[green]✓ Auto-generated {total_gen} tests in {generated.generation_time:.1f}s[/green]")
                 console.print(f"[green]✓ Tests saved to: {generated.output_file}[/green]\n")
                 
                 # Re-discover test files after generation

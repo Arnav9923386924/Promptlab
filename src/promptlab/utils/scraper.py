@@ -166,7 +166,7 @@ class WebScraper:
                 "Cache-Control": "max-age=0",
             }
             self._client = httpx.AsyncClient(
-                timeout=self.config.timeout_seconds,
+                timeout=self.config.timeout_seconds or None,  # 0 → None (no timeout)
                 headers=headers,
                 follow_redirects=True,
                 http2=True,

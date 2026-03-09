@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from pathlib import Path
+from typing import Optional
 import yaml
 
 from promptlab import __version__
@@ -1407,6 +1408,272 @@ def evaluate_conversation(
             raise
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+
+
+@app.command("scraper")
+def scraper_generate_tests(
+    bsp_file: str = typer.Option(None, "--bsp-file", "-b", help="Path to BSP file (default: bsp.txt in cwd, then config)"),
+    count: Optional[int] = typer.Option(None, "--count", "-n", help="Number of test cases to generate (default: auto_generate_count from config, else 50)"),
+    output_dir: str = typer.Option("temp", "--output-dir", "-d", help="Directory to save generated test cases"),
+    mode: Optional[str] = typer.Option(None, "--mode", "-m", help="Generation mode: 'web', 'docs_web', or 'hybrid' (prompted if omitted)"),
+    output_type: str = typer.Option("all", "--type", "-t", help="Test output type: 'benchmark' (Q&A), 'cloze' (masked), or 'all'"),
+    max_pages: int = typer.Option(20, "--max-pages", help="Maximum web pages to scrape (web/hybrid modes)"),
+    max_docs: int = typer.Option(20, "--max-docs", help="Maximum documents to download (docs_web/hybrid modes)"),
+    chunk_size: int = typer.Option(800, "--chunk-size", help="Chunk size in words for document indexing"),
+    retrieval_top_k: int = typer.Option(10, "--top-k", help="Top-K chunks per retrieval query"),
+):
+    """Generate test cases from your BSP — no validation run needed.
+
+    Reads the Behavior Specification Prompt (BSP) from bsp.txt (or promptlab.yaml),
+    analyzes it to extract domain/keywords, then generates ready-to-use YAML test
+    files saved to the output directory.
+
+    If --mode is not supplied you will be prompted to choose interactively.
+
+    Generation modes:
+      web      — scrape web pages → regex extract Q&A / cloze tests (original)
+      docs_web — download docs → TF-IDF index → retrieve → LLM/heuristic generate
+                 (higher quality, provenance metadata on every case)
+      hybrid   — docs_web first, web fallback if target not met
+
+    Examples:
+      promptlab scraper                              # interactive mode picker
+      promptlab scraper --mode web --count 50        # skip prompt, web mode
+      promptlab scraper --mode docs_web --count 100  # 100 doc-grounded tests
+      promptlab scraper --mode hybrid                # docs_web + web fallback
+      promptlab scraper --bsp-file path/to/bsp.txt   # Use a specific BSP file
+      promptlab scraper --mode docs_web --top-k 15   # More retrieval diversity
+      promptlab scraper --type benchmark             # Q&A pairs only
+      promptlab scraper --output-dir my_tests        # Save to custom directory
+    """
+    import asyncio as aio
+
+    # ------------------------------------------------------------------ #
+    # 0. Interactive mode selection (only when --mode not passed)          #
+    # ------------------------------------------------------------------ #
+    if mode is None:
+        console.print()
+        console.print(Panel(
+            "[bold]1.[/bold] [cyan]web[/cyan]      — Scrape web pages → regex extract Q&A / cloze tests\n"
+            "              Fast, no downloads, original pipeline.\n\n"
+            "[bold]2.[/bold] [green]docs_web[/green] — Download docs → index → retrieve → generate\n"
+            "              Higher quality, provenance on every testcase.\n\n"
+            "[bold]3.[/bold] [yellow]hybrid[/yellow]   — docs_web first, web scraping fallback if target not met.",
+            title="[bold cyan]Choose generation mode[/bold cyan]",
+            border_style="cyan",
+        ))
+        choice = typer.prompt(
+            "Enter choice",
+            default="1",
+        ).strip()
+        mode = {"1": "web", "2": "docs_web", "3": "hybrid"}.get(
+            choice, choice.lower()
+        )
+        if mode not in ("web", "docs_web", "hybrid"):
+            console.print(f"[red]✗ Unknown mode '{mode}'. Choose 1, 2, or 3.[/red]")
+            raise typer.Exit(1)
+        console.print(f"[dim]Mode selected: {mode}[/dim]\n")
+    from promptlab.utils.config import load_config, load_bsp
+    from promptlab.utils.auto_test_generator import AutoTestGenerator
+
+    cwd = Path.cwd()
+
+    # ------------------------------------------------------------------ #
+    # 1. Resolve BSP                                                       #
+    # ------------------------------------------------------------------ #
+    bsp: str = ""
+
+    if bsp_file:
+        bsp_path = Path(bsp_file)
+        if not bsp_path.exists():
+            console.print(f"[red]✗ BSP file not found: {bsp_path}[/red]")
+            raise typer.Exit(1)
+        bsp = bsp_path.read_text(encoding="utf-8").strip()
+        console.print(f"[dim]Using BSP from: {bsp_path}[/dim]")
+    else:
+        # Prefer an explicit bsp.txt in the current directory
+        default_bsp_txt = cwd / "bsp.txt"
+        if default_bsp_txt.exists():
+            bsp = default_bsp_txt.read_text(encoding="utf-8").strip()
+            console.print(f"[dim]Using BSP from: {default_bsp_txt}[/dim]")
+        else:
+            # Fall back to promptlab.yaml config
+            config_path = cwd / "promptlab.yaml"
+            if config_path.exists():
+                config = load_config(config_path)
+                bsp = load_bsp(config, cwd) or ""
+                if bsp:
+                    console.print("[dim]Using BSP from promptlab.yaml[/dim]")
+
+    if not bsp:
+        console.print(
+            "[red]✗ No BSP found.[/red]\n"
+            "[dim]Provide one via --bsp-file, place a bsp.txt in the current directory, "
+            "or configure 'bsp.prompt' / 'bsp.prompt_file' in promptlab.yaml.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    # ------------------------------------------------------------------ #
+    # 2. Resolve output directory & API keys                               #
+    # ------------------------------------------------------------------ #
+    out_dir = cwd / output_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    serpapi_key: str | None = None
+    brave_api_key: str | None = None
+    llm_model: str = "ollama/llama3.1:8b"
+    scraper_timeout: float = 30.0
+    config_path = cwd / "promptlab.yaml"
+    config = None
+    if config_path.exists():
+        try:
+            config = load_config(config_path)
+            serpapi_key = config.scraper.serpapi_key if config.scraper else None
+            brave_api_key = config.scraper.brave_api_key if config.scraper else None
+            scraper_timeout = float(config.scraper.timeout) if config.scraper and config.scraper.timeout is not None else 30.0
+            llm_model = config.docs_web.llm_model or config.models.default
+            # Pull count from config when not supplied on CLI
+            if count is None and config.bsp and config.bsp.auto_generate_count:
+                count = config.bsp.auto_generate_count
+            # Pull docs_web defaults from config when not overridden on CLI
+            if max_docs == 20 and config.docs_web:
+                max_docs = config.docs_web.max_docs
+            if chunk_size == 800 and config.docs_web:
+                chunk_size = config.docs_web.chunk_size
+            if retrieval_top_k == 10 and config.docs_web:
+                retrieval_top_k = config.docs_web.retrieval_top_k
+        except Exception:
+            pass
+
+    import os
+    serpapi_key = serpapi_key or os.environ.get("SERPAPI_KEY") or os.environ.get("SERPAPI_API_KEY")
+    brave_api_key = brave_api_key or os.environ.get("BRAVE_API_KEY")
+    # Final fallback for count
+    count = count or 50
+
+    # ------------------------------------------------------------------ #
+    # 3. Display plan                                                      #
+    # ------------------------------------------------------------------ #
+    mode_detail = {
+        "web": "web scraping → regex extract",
+        "docs_web": "download docs → index → retrieve → generate (provenance)",
+        "hybrid": "docs_web first, web fallback",
+    }.get(mode, mode)
+
+    plan_lines = [
+        f"[bold]BSP preview:[/bold] {bsp[:120].strip()}{'...' if len(bsp) > 120 else ''}",
+        f"[bold]Target tests:[/bold] {count}",
+        f"[bold]Mode:[/bold] {mode} — {mode_detail}",
+        f"[bold]Output type:[/bold] {output_type}",
+    ]
+    if mode in ("web", "hybrid"):
+        plan_lines.append(f"[bold]Max pages:[/bold] {max_pages}")
+    if mode in ("docs_web", "hybrid"):
+        plan_lines.append(f"[bold]Max docs:[/bold] {max_docs}")
+        plan_lines.append(f"[bold]Chunk size:[/bold] {chunk_size} words")
+        plan_lines.append(f"[bold]Top-K:[/bold] {retrieval_top_k}")
+        plan_lines.append(f"[bold]LLM model:[/bold] {llm_model}")
+    plan_lines.append(f"[bold]Output dir:[/bold] {out_dir}")
+    plan_lines.append(f"[bold]SerpAPI:[/bold] {'configured' if serpapi_key else 'not set (using fallback search)'}")
+
+    console.print(Panel(
+        "\n".join(plan_lines),
+        title="[bold cyan]Scraper — Test Case Generation[/bold cyan]",
+        border_style="cyan",
+    ))
+
+    # ------------------------------------------------------------------ #
+    # 4. Run generation                                                    #
+    # ------------------------------------------------------------------ #
+    async def _run():
+        # Build LLM runner for docs_web / hybrid when a model config exists
+        llm_runner = None
+        if mode in ("docs_web", "hybrid") and config is not None:
+            try:
+                from promptlab.llm_council.llm_runner.runner import LLMRunner
+                runner_config = {
+                    "default": llm_model,
+                    "providers": {
+                        name: {"endpoint": p.endpoint, "api_key": p.api_key}
+                        for name, p in config.models.providers.items()
+                    } if config.models.providers else {},
+                }
+                llm_runner = LLMRunner(runner_config)
+            except Exception:
+                pass  # fall back to heuristic generation
+
+        generator = AutoTestGenerator(
+            serpapi_key=serpapi_key,
+            brave_api_key=brave_api_key,
+            max_pages=max_pages,
+            project_root=cwd,
+            llm_runner=llm_runner,
+            llm_model=llm_model,
+            max_docs=max_docs,
+            chunk_size=chunk_size,
+            retrieval_top_k=retrieval_top_k,
+            scraper_timeout=scraper_timeout,
+        )
+        return await generator.generate_tests(
+            bsp=bsp,
+            target_count=count,
+            output_dir=out_dir,
+            output_type=output_type,
+            generation_mode=mode,
+        )
+
+    try:
+        result = aio.run(_run())
+    except Exception as e:
+        if isinstance(e, SystemExit):
+            raise
+        console.print(f"[red]✗ Scraper failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    # ------------------------------------------------------------------ #
+    # 5. Summary                                                           #
+    # ------------------------------------------------------------------ #
+    if result.generation_mode_used in ("docs_web", "hybrid"):
+        doc_count = len(result.generated_cases)
+        web_count = len(result.qa_pairs) + len(result.masked_tests)
+        total = doc_count + web_count
+        summary_lines = [
+            f"[bold green]✓ Generated {total} test cases[/bold green]",
+            "",
+            f"  Doc-grounded cases  : {doc_count}",
+        ]
+        if web_count:
+            summary_lines.append(f"  Web Q&A + cloze     : {web_count}")
+        summary_lines += [
+            f"  Sources downloaded   : {result.scraped_sources}",
+            f"  Mode                : {result.generation_mode_used}",
+            f"  Generation time     : {result.generation_time:.1f}s",
+            "",
+            f"  Saved to: [bold]{result.output_file}[/bold]",
+            "",
+            "[dim]Run 'promptlab validate' to evaluate your BSP against these tests.[/dim]",
+        ]
+    else:
+        total = len(result.qa_pairs) + len(result.masked_tests)
+        summary_lines = [
+            f"[bold green]✓ Generated {total} test cases[/bold green]",
+            "",
+            f"  Q&A (benchmark) pairs : {len(result.qa_pairs)}",
+            f"  Masked (cloze) tests  : {len(result.masked_tests)}",
+            f"  Web pages scraped     : {result.scraped_sources}",
+            f"  Generation time       : {result.generation_time:.1f}s",
+            "",
+            f"  Saved to: [bold]{result.output_file}[/bold]",
+            "",
+            "[dim]Run 'promptlab validate' to evaluate your BSP against these tests.[/dim]",
+        ]
+
+    console.print()
+    console.print(Panel(
+        "\n".join(summary_lines),
+        title="[bold green]Scraper Complete[/bold green]",
+        border_style="green",
+    ))
 
 
 @app.command("generate-training-data")

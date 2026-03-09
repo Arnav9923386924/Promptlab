@@ -310,6 +310,90 @@ BSP validation uses `promptlab.yaml` configuration with these key sections:
 
 ---
 
+## Test Generation Modes
+
+PromptLab supports three test generation modes, configured via `bsp.generation_mode` in `promptlab.yaml` or the `--mode` flag on the `scraper` command.
+
+### Mode: `web` (default)
+
+The original pipeline — scrape web pages, extract Q&A / cloze tests with regex heuristics.
+
+```bash
+promptlab scraper --mode web --count 50
+```
+
+### Mode: `docs_web`
+
+**Document-grounded generation** — downloads authoritative documents, indexes them locally with TF-IDF, retrieves relevant chunks per intent query, and generates testcases from evidence using an LLM (with heuristic fallback). Every testcase includes **provenance metadata**: `source_doc_id`, `source_url`, `page_number`, `chunk_id`, `section`, and `evidence_span`.
+
+```bash
+promptlab scraper --mode docs_web --count 100
+promptlab scraper --mode docs_web --top-k 15 --max-docs 30
+```
+
+**Pipeline:**
+```
+BSP Analysis → Search & Download → Chunk & TF-IDF Index → Retrieve → LLM/Heuristic Generate → Static Validate → YAML
+```
+
+**Provenance example in generated YAML:**
+```yaml
+cases:
+  - id: legal-compliance-qa-1
+    prompt: "What is regulatory compliance?"
+    assertions:
+      - type: contains
+        value: "following all applicable laws"
+        case_sensitive: false
+    tags: [legal_compliance, qa, easy]
+    provenance:
+      source_doc_id: a1b2c3d4e5f6
+      source_url: https://docs.example.com/compliance-guide
+      page_number: 2
+      chunk_id: 7f3a2c1b9e
+      section: "Key Concepts in Regulatory Frameworks"
+      evidence_span: "Regulatory compliance means following all applicable laws..."
+```
+
+### Mode: `hybrid`
+
+Runs `docs_web` first. If the target count isn't reached, falls back to the `web` pipeline for the remainder.
+
+```bash
+promptlab scraper --mode hybrid --count 100
+```
+
+### Configuration
+
+```yaml
+# promptlab.yaml
+bsp:
+  generation_mode: docs_web   # web | docs_web | hybrid
+
+docs_web:
+  max_docs: 20          # Max documents to download
+  chunk_size: 800        # Chunk size in words
+  chunk_overlap: 200     # Word overlap between chunks
+  retrieval_top_k: 10    # Top-K chunks per retrieval query
+  target_count: 100      # Default target testcases
+  llm_model: null        # Override model (uses models.default if null)
+```
+
+### CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `web` | Generation mode: `web`, `docs_web`, `hybrid` |
+| `--count` | `50` | Target number of test cases |
+| `--max-docs` | `20` | Max documents to download (docs_web/hybrid) |
+| `--max-pages` | `20` | Max web pages to scrape (web/hybrid) |
+| `--chunk-size` | `800` | Chunk size in words for indexing |
+| `--top-k` | `10` | Top-K chunks per retrieval query |
+| `--type` | `all` | `benchmark` (Q&A), `cloze`, or `all` |
+| `--output-dir` | `temp` | Output directory for YAML files |
+
+---
+
 ## Web Scraping & Test Generation
 
 ### Automatic Test Generation
