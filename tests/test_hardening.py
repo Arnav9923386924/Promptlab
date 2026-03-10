@@ -155,7 +155,7 @@ class TestScoreParsing:
         )
         s = v._parse_batch_scores(text)
         assert s["final_score"] == 0.82
-        assert s["role_adherence"] == 0.9
+        assert s["instruction_following"] == 0.9
         assert s["parse_error"] is False
 
     def test_overall_only_backfills_dimensions(self):
@@ -163,8 +163,8 @@ class TestScoreParsing:
         text = "FINAL_SCORE: 0.7\nCONFIDENCE: medium\n"
         s = v._parse_batch_scores(text)
         assert s["final_score"] == 0.7
-        assert s["role_adherence"] == 0.7  # backfilled
-        assert s["response_quality"] == 0.7
+        assert s["instruction_following"] == 0.7  # backfilled
+        assert s["helpfulness"] == 0.7
 
     def test_malformed_flags_parse_error(self):
         v = self._make_validator()
@@ -255,10 +255,10 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.72
-        assert s["role_adherence"] == 0.8
-        assert s["response_quality"] == 0.65
-        assert s["consistency"] == 0.75
-        assert s["constraint_compliance"] == 0.68
+        assert s["instruction_following"] == 0.8
+        assert s["helpfulness"] == 0.65
+        assert s["coherence"] == 0.75
+        assert s["safety"] == 0.68
 
     def test_parse_bold_wrapped_fields(self):
         """Some models bold the field names — should still parse."""
@@ -273,7 +273,7 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.80
-        assert s["role_adherence"] == 0.85
+        assert s["instruction_following"] == 0.85
 
     def test_parse_list_prefixed_fields(self):
         """Models sometimes prefix with list markers."""
@@ -287,7 +287,7 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.65
-        assert s["role_adherence"] == 0.7
+        assert s["instruction_following"] == 0.7
 
     def test_parse_mixed_markdown(self):
         """Combination of code fence + bold + list prefix."""
@@ -301,7 +301,7 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.88
-        assert s["role_adherence"] == 0.9
+        assert s["instruction_following"] == 0.9
 
     def test_parse_plain_text_still_works(self):
         """Regression: normal well-formatted output must still work."""
@@ -316,8 +316,8 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.59
-        assert s["role_adherence"] == 0.75
-        assert s["constraint_compliance"] == 0.45
+        assert s["instruction_following"] == 0.75
+        assert s["safety"] == 0.45
 
     def test_parse_json_object_scores(self):
         """Many models return JSON instead of key-value lines."""
@@ -335,10 +335,10 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.74
-        assert s["role_adherence"] == 0.8
-        assert s["response_quality"] == 0.7
-        assert s["consistency"] == 0.75
-        assert s["constraint_compliance"] == 0.68
+        assert s["instruction_following"] == 0.8
+        assert s["helpfulness"] == 0.7
+        assert s["coherence"] == 0.75
+        assert s["safety"] == 0.68
         assert "Mostly compliant" in s["reasoning"]
         assert s["weak_areas"] == ["constraint handling"]
 
@@ -347,10 +347,10 @@ class TestCouncilScoreParsingMarkdown:
         c = self._make_council()
         text = "R:0.8 Q:0.6 C:0.8 K:0.4 O:0.65"
         s = c._parse_score_fields(text)
-        assert s["role_adherence"] == 0.8
-        assert s["response_quality"] == 0.6
-        assert s["consistency"] == 0.8
-        assert s["constraint_compliance"] == 0.4
+        assert s["instruction_following"] == 0.8
+        assert s["helpfulness"] == 0.6
+        assert s["coherence"] == 0.8
+        assert s["safety"] == 0.4
         assert s["overall_score"] == 0.65
 
     def test_parse_markdown_table_with_percentages(self):
@@ -367,10 +367,10 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.69
-        assert s["role_adherence"] == 0.8
-        assert s["response_quality"] == 0.6
-        assert s["consistency"] == 0.8
-        assert s["constraint_compliance"] == 0.4
+        assert s["instruction_following"] == 0.8
+        assert s["helpfulness"] == 0.6
+        assert s["coherence"] == 0.8
+        assert s["safety"] == 0.4
 
     def test_parse_arrow_separator(self):
         """Arrow separators (→, ->, =>) should be normalised and parsed."""
@@ -384,8 +384,8 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.77
-        assert s["role_adherence"] == 0.85
-        assert s["response_quality"] == 0.70
+        assert s["instruction_following"] == 0.85
+        assert s["helpfulness"] == 0.70
 
     def test_parse_natural_language_scores(self):
         """Scores embedded in natural language should be caught by regex fallback."""
@@ -398,7 +398,7 @@ class TestCouncilScoreParsingMarkdown:
         s = c._parse_score_fields(text)
         # The regex fallback should catch these
         assert s["overall_score"] is not None
-        assert s["role_adherence"] is not None
+        assert s["instruction_following"] is not None
 
     def test_dimension_regex_fallback(self):
         """Dimension-level regex fallback should find scores in prose."""
@@ -409,8 +409,8 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.78
-        assert s["role_adherence"] == 0.85
-        assert s["consistency"] == 0.70
+        assert s["instruction_following"] == 0.85
+        assert s["coherence"] == 0.70
 
     def test_parse_scores_out_of_ten(self):
         """Scores given as X/10 should normalise to 0..1."""
@@ -424,8 +424,8 @@ class TestCouncilScoreParsingMarkdown:
         )
         s = c._parse_score_fields(text)
         assert s["overall_score"] == 0.75
-        assert s["role_adherence"] == 0.8
-        assert s["constraint_compliance"] == 0.5
+        assert s["instruction_following"] == 0.8
+        assert s["safety"] == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -438,21 +438,21 @@ class TestHistoryConsistency:
     def test_zeroed_dimensions_are_backfilled(self, tmp_path: Path):
         from promptlab.utils.history import EvaluationHistory
         h = EvaluationHistory(project_root=tmp_path)
-        h.record(overall_score=0.8, role_adherence=0.0, response_quality=0.0, consistency=0.0)
+        h.record(overall_score=0.8, instruction_following=0.0, helpfulness=0.0, coherence=0.0)
         entry = h._history[-1]
         # Should backfill dimensions from overall
-        assert entry.role_adherence == 0.8
-        assert entry.response_quality == 0.8
-        assert entry.consistency == 0.8
+        assert entry.instruction_following == 0.8
+        assert entry.helpfulness == 0.8
+        assert entry.coherence == 0.8
         assert entry.parse_error is True
 
     def test_normal_record_no_parse_error(self, tmp_path: Path):
         from promptlab.utils.history import EvaluationHistory
         h = EvaluationHistory(project_root=tmp_path)
-        h.record(overall_score=0.75, role_adherence=0.8, response_quality=0.7, consistency=0.75)
+        h.record(overall_score=0.75, instruction_following=0.8, helpfulness=0.7, coherence=0.75)
         entry = h._history[-1]
         assert entry.parse_error is False
-        assert entry.role_adherence == 0.8
+        assert entry.instruction_following == 0.8
 
     def test_explicit_parse_error_flag(self, tmp_path: Path):
         from promptlab.utils.history import EvaluationHistory

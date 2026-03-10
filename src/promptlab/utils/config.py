@@ -107,8 +107,8 @@ class GitConfig(BaseModel):
     """Git integration configuration."""
     # Whether to enable git push on score improvement
     enabled: bool = False
-    # Branch to push to
-    branch: str = "main"
+    # Branch to push to (null → auto-detect current branch)
+    branch: Optional[str] = "main"
     # Commit message template (supports {score}, {previous_score}, {improvement})
     commit_template: str = "chore: BSP validation passed (score: {score:.2f}, improvement: +{improvement:.2f})"
     # Whether to push automatically or just commit

@@ -1,0 +1,409 @@
+metadata:
+  name: 'Auto-Generated Tests: General'
+  description: 'Document-grounded tests from BSP analysis. Domain: general. Role:
+    helpful'
+  generated_at: '2026-03-09T22:15:50.311224'
+  source: promptlab-docs-web-generator
+  generation_mode: docs_web
+  test_count: 19
+  keywords:
+  - always
+  - keep
+defaults:
+  temperature: 0
+cases:
+- id: general-qa-1
+  prompt: What is the primary goal of implementing best management practices in livestock
+    and pasture management?
+  assertions:
+  - type: contains
+    value: to regulate stocking rates
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: 26cd3a9efcd4
+    source_url: https://en.wikipedia.org/wiki/Best_practice
+    page_number: 5
+    chunk_id: d652b5884b
+    section: Best management practice for water pollution
+    evidence_span: as recommending low-phosphorus feed ingredients, in forestry to
+      manage riparian buffer zones in livestock and pasture management to regulate
+      stocking rates, and in particular, best management practices have been important
+      to improving nonpoint source
+- id: general-qa-2
+  prompt: According to RNAO's best practice guidelines, how many categories do their
+    BPGs cover?
+  assertions:
+  - type: contains
+    value: nine
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: d76b8570c53e
+    source_url: https://rnao.ca/bpg/guidelines
+    page_number: 1
+    chunk_id: 7c5def90e2
+    section: Best Practice Guidelines
+    evidence_span: 'Best Practice Guidelines Best practice guidelines RNAO has more
+      than 50 BPGs covering nine categories: children and youth; clinical; equity,
+      diversity and inclusion; foundational; health system; healthy work environment;
+      mental health and substance u'
+- id: general-qa-3
+  prompt: What is one of the most common challenges experienced by people who are
+    learning English as a second language?
+  assertions:
+  - type: contains
+    value: choosing the right word for the right context
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - pitfall
+  provenance:
+    source_doc_id: 0e4a09589607
+    source_url: https://www.oxfordinternationalenglish.com/common-english-grammar-mistakes/
+    page_number: 1
+    chunk_id: 1dbee378e6
+    section: Common English Grammar Mistakes and How to Fix Them
+    evidence_span: Common English Grammar Mistakes and How to Fix Them Explore our
+      English language courses One of the most common challenges experienced by people
+      who are learning English as a second language is choosing the right word for
+      the right context The Englis
+- id: general-qa-4
+  prompt: What is the recommended method to acquire an Art Hall General in the game?
+  assertions:
+  - type: contains
+    value: Assistant Generals Guide
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - medium
+  - best_practice
+  provenance:
+    source_doc_id: 001448153d6e
+    source_url: https://evonyguidewiki.com/en/generals-en/
+    page_number: 1
+    chunk_id: 5b1610f7ba
+    section: ''
+    evidence_span: List of Generals by Role (+ How to Get) Art Hall General (General
+      Hall) – List of Ways to Get Assistant Generals Guide Explanation of basic specifications
+      and results of a competitive survey of basic skills, etc.
+- id: general-qa-5
+  prompt: What key process does BPI look for when identifying innovative practices
+    for its best practice initiatives?
+  assertions:
+  - type: contains
+    value: co-creation
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: 72543ad73159
+    source_url: https://blog.bestpracticeinstitute.org/is-there-a-universal-understanding-of-what-best-practices-means-2/
+    page_number: 1
+    chunk_id: 7e3bca3293
+    section: ''
+    evidence_span: BPI searches for innovative practices that incorporate a process
+      of co-creation for its best practice initiatives.
+- id: general-qa-6
+  prompt: What is the first step in ABC’s care process?
+  assertions:
+  - type: contains
+    value: A personal consultation with an ABC Care Coordinat
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: a6a602d041fc
+    source_url: https://www.healthcare-outlook.com/aged-care/always-best-care-senior-services-a-new-standard-for-care
+    page_number: 1
+    chunk_id: 5033fe3822
+    section: ''
+    evidence_span: The initial step in ABC’s care process includes a personal consultation
+      with an ABC Care Coordinator.
+- id: general-qa-7
+  prompt: What is the primary purpose of the 'General Best Practices for Immunization'
+    page?
+  assertions:
+  - type: contains
+    value: General Best Practices
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: 305ae2523278
+    source_url: https://www.cdc.gov/vaccines/hcp/imz-best-practices/index.html
+    page_number: 1
+    chunk_id: 121abcb31d
+    section: General Best Practices for Immunization
+    evidence_span: General Best Practices for Immunization This page provides information
+      for health care and immunization providers about concerns that commonly arise
+      when vaccinating people of various ages.
+- id: general-qa-8
+  prompt: In the described lesson plan, what is the final task students complete after
+    researching and evaluating locations?
+  assertions:
+  - type: contains
+    value: making a short oral presentation
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - capability
+  provenance:
+    source_doc_id: f9b22c33ba50
+    source_url: https://cambridge-community.org.uk/professional-development/gswkey/index.html
+    page_number: 5
+    chunk_id: 5d7fe1fc37
+    section: Example of an enquiry sequence
+    evidence_span: After a general introduction to the USA, learners work in small
+      groups to research and evaluate one location per lesson, applying these to the
+      needs of the family and making a short oral presentation to answer the question
+      in the final lesson.
+- id: general-qa-9
+  prompt: What is the primary focus of the Biology I Syllabus and Course Overview?
+  assertions:
+  - type: contains
+    value: General Biology
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - example
+  provenance:
+    source_doc_id: c0316d076a09
+    source_url: https://www.pearson.com/channels/biology/study-guides/biology-i-syllabus-and-course-overview-general
+    page_number: 1
+    chunk_id: c7e1f73741
+    section: Biology I Syllabus and Course Overview – General Biology
+    evidence_span: Biology I Syllabus and Course Overview – General Biology Study
+      Guide - Smart Notes Tailored notes based on your materials, expanded with key
+      definitions, examples, and context.
+- id: general-qa-10
+  prompt: According to general title capitalization rules, which parts of speech are
+    typically capitalized in a title?
+  assertions:
+  - type: contains
+    value: Nouns, verbs
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - knowledge
+  provenance:
+    source_doc_id: 08fb443325ab
+    source_url: https://www.grammarly.com/blog/grammar/30-grammar-mistakes-writers-should-avoid/
+    page_number: 2
+    chunk_id: 0d5f0b5dd9
+    section: Our cousins are taller
+    evidence_span: 'I need the weather statistics for the following cities: London,
+      England Although it can vary between style guides, the general rules for title
+      capitalization are: Articles are lowercase unless they’re the first or last
+      word of the title Nouns, verbs,'
+- id: general-qa-11
+  prompt: What is the maximum combined length constraint for a text generation model's
+    prompt and output?
+  assertions:
+  - type: contains
+    value: the model’s maximum context length
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - knowledge
+  provenance:
+    source_doc_id: 79375bf44ece
+    source_url: https://developers.openai.com/api/docs/concepts/
+    page_number: 1
+    chunk_id: 397789ac4f
+    section: ''
+    evidence_span: One limitation to keep in mind is that for a text generation model
+      the prompt and the generated output combined must be no more than the model’s
+      maximum context length.
+- id: general-qa-13
+  prompt: What method did ABC use to test its caregivers during the COVID-19 pandemic?
+  assertions:
+  - type: contains
+    value: rapid testing kits
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - knowledge
+  provenance:
+    source_doc_id: a6a602d041fc
+    source_url: https://www.healthcare-outlook.com/aged-care/always-best-care-senior-services-a-new-standard-for-care
+    page_number: 2
+    chunk_id: eaf7438c7f
+    section: PROVIDING ASSISTED LIVING
+    evidence_span: During the height of the COVID-19 pandemic, ABC tested its caregivers
+      with rapid testing kits, in line with the company policy of always placing health
+      and safety at the forefront of all operations.
+- id: general-qa-16
+  prompt: What is one best practice in education that involves preparing for the next
+    teaching activity before the current one finishes?
+  assertions:
+  - type: contains
+    value: Creating continuity
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: f634cce12e54
+    source_url: https://www.indeed.com/career-advice/career-development/what-are-best-practices
+    page_number: 2
+    chunk_id: af77933f36
+    section: Training staff to treat patient care as their top priority
+    evidence_span: 'Best practices in education include: Preparing the next teaching
+      activity before the current one finishes, therefore creating continuity Involving
+      students in classroom activities, to improve their communication, interpersonal
+      and collaboration skill'
+- id: general-qa-20
+  prompt: What type of care is provided by the Senior Living Referral Services for
+    individuals with dementia?
+  assertions:
+  - type: contains
+    value: Expert care
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - procedure
+  provenance:
+    source_doc_id: 0f7e52fa3d8f
+    source_url: https://alwaysbestcare.com/
+    page_number: 1
+    chunk_id: f86867b4dd
+    section: Professional & Trusted
+    evidence_span: Senior Living Referral Services Special Care services Dementia
+      Care Service Expert care for your loved ones delivered by compassionate professionals
+      Team of Caring Professionals We are a team of caring and compassionate professionals
+      working together
+- id: general-qa-22
+  prompt: In the recommended general combination in the notice board, which two pairs
+    of characters are mentioned?
+  assertions:
+  - type: contains
+    value: Elektra + Kaguya, Zhao Yun + Custer
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - knowledge
+  provenance:
+    source_doc_id: 001448153d6e
+    source_url: https://evonyguidewiki.com/en/generals-en/
+    page_number: 2
+    chunk_id: 4c291ecccd
+    section: Evony TKR Guide Wiki admin
+    evidence_span: By the way, in the recommended general combination in the notice
+      board, Elektra + Kaguya, Zhao Yun + Custer, etc.
+- id: general-qa-23
+  prompt: Which of the following is NOT listed as a substantive concept in the evidence?
+  assertions:
+  - type: contains
+    value: employment
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - knowledge
+  provenance:
+    source_doc_id: f9b22c33ba50
+    source_url: https://cambridge-community.org.uk/professional-development/gswkey/index.html
+    page_number: 4
+    chunk_id: 62c4fab4de
+    section: Common misconceptions
+    evidence_span: It is strong on factual knowledge and also builds understanding
+      of substantive concepts such as 'climate', 'urban areas', 'trade' and 'employment'.
+- id: general-qa-31
+  prompt: A concept is an abstract idea that represents a category of things, such
+    as 'tree' representing all types of trees. What is the term for this abstract
+    idea that represents a category of things?
+  assertions:
+  - type: contains
+    value: concept
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - pitfall
+  provenance:
+    source_doc_id: bb2e515d350a
+    source_url: https://simplicable.com/en/key-concepts
+    page_number: 1
+    chunk_id: f6c94c24fd
+    section: Qualitative Information
+    evidence_span: from https://simplicable.com/en/key-concepts The definition of
+      concept with examples.
+- id: general-qa-36
+  prompt: What is the key characteristic of practices that have been deployed in some
+    communities over a long period of time and produced positive outcomes?
+  assertions:
+  - type: contains
+    value: general community consensus
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: 26cd3a9efcd4
+    source_url: https://en.wikipedia.org/wiki/Best_practice
+    page_number: 3
+    chunk_id: 671426201b
+    section: Field Tested Best Practice
+    evidence_span: Some communities have deployed practices over a long period of
+      time that has produced positive outcomes as well as a general community consensus
+      to be successful.
+- id: general-qa-38
+  prompt: What is the definition of best practices?
+  assertions:
+  - type: contains
+    value: Examples Updated December
+    case_sensitive: false
+  tags:
+  - general
+  - qa
+  - easy
+  - best_practice
+  provenance:
+    source_doc_id: f634cce12e54
+    source_url: https://www.indeed.com/career-advice/career-development/what-are-best-practices
+    page_number: 1
+    chunk_id: 146f7d334a
+    section: 'Best Practices: Definition, Importance and Examples'
+    evidence_span: 'Best Practices: Definition, Importance and Examples Updated December
+      19, 2025 What are best practices?'

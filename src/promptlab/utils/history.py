@@ -22,9 +22,9 @@ class HistoryEntry:
     bsp_hash: str
     model: str
     overall_score: float
-    role_adherence: float = 0.0
-    response_quality: float = 0.0
-    consistency: float = 0.0
+    instruction_following: float = 0.0
+    helpfulness: float = 0.0
+    coherence: float = 0.0
     confidence: str = "medium"
     total_tests: int = 0
     weak_areas: list[str] = field(default_factory=list)
@@ -77,9 +77,23 @@ class EvaluationHistory:
         if self.history_file.exists():
             try:
                 data = json.loads(self.history_file.read_text(encoding="utf-8"))
+                # Backward-compat: remap legacy dimension names
+                _LEGACY_MAP = {
+                    "role_adherence": "instruction_following",
+                    "response_quality": "helpfulness",
+                    "consistency": "coherence",
+                }
+                cleaned = []
+                for entry in data.get("evaluations", []):
+                    for old_key, new_key in _LEGACY_MAP.items():
+                        if old_key in entry and new_key not in entry:
+                            entry[new_key] = entry.pop(old_key)
+                        elif old_key in entry:
+                            entry.pop(old_key)
+                    cleaned.append(entry)
                 self._history = [
                     HistoryEntry(**entry)
-                    for entry in data.get("evaluations", [])
+                    for entry in cleaned
                 ]
             except (json.JSONDecodeError, TypeError):
                 self._history = []
@@ -106,9 +120,9 @@ class EvaluationHistory:
         bsp_version: str = "unknown",
         bsp_hash: str = "",
         model: str = "",
-        role_adherence: float = 0.0,
-        response_quality: float = 0.0,
-        consistency: float = 0.0,
+        instruction_following: float = 0.0,
+        helpfulness: float = 0.0,
+        coherence: float = 0.0,
         confidence: str = "medium",
         total_tests: int = 0,
         weak_areas: Optional[list[str]] = None,
@@ -122,12 +136,12 @@ class EvaluationHistory:
         overall_score and flag parse_error so history is never silently
         inconsistent.
         """
-        dims = [role_adherence, response_quality, consistency]
+        dims = [instruction_following, helpfulness, coherence]
         if overall_score > 0 and all(d == 0.0 for d in dims) and not parse_error:
             # Back-fill dimensions from overall to avoid silent zeros
-            role_adherence = overall_score
-            response_quality = overall_score
-            consistency = overall_score
+            instruction_following = overall_score
+            helpfulness = overall_score
+            coherence = overall_score
             parse_error = True
         
         entry = HistoryEntry(
@@ -136,9 +150,9 @@ class EvaluationHistory:
             bsp_hash=bsp_hash,
             model=model,
             overall_score=round(overall_score, 4),
-            role_adherence=round(role_adherence, 4),
-            response_quality=round(response_quality, 4),
-            consistency=round(consistency, 4),
+            instruction_following=round(instruction_following, 4),
+            helpfulness=round(helpfulness, 4),
+            coherence=round(coherence, 4),
             confidence=confidence,
             total_tests=total_tests,
             weak_areas=weak_areas or [],
@@ -166,9 +180,9 @@ class EvaluationHistory:
 
         metrics = {
             "overall_score": (current.overall_score, previous.overall_score),
-            "role_adherence": (current.role_adherence, previous.role_adherence),
-            "response_quality": (current.response_quality, previous.response_quality),
-            "consistency": (current.consistency, previous.consistency),
+            "instruction_following": (current.instruction_following, previous.instruction_following),
+            "helpfulness": (current.helpfulness, previous.helpfulness),
+            "coherence": (current.coherence, previous.coherence),
         }
 
         for metric, (curr_val, prev_val) in metrics.items():

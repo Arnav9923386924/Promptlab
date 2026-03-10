@@ -218,17 +218,17 @@ class TestCouncilChunkedEvaluation:
                 confidence="high",
                 member_scores=[BatchJudgeScore(
                     model="m1", overall_score=score,
-                    role_adherence=score, response_quality=score,
-                    consistency=score, constraint_compliance=score,
+                    instruction_following=score, helpfulness=score,
+                    coherence=score, safety=score,
                     reasoning="test", weak_areas=[],
                 )],
                 summary=f"chunk {call_count[0]}",
                 recommendations=[],
                 breakdown={
-                    "role_adherence": score,
-                    "response_quality": score,
-                    "consistency": score,
-                    "constraint_compliance": score,
+                    "instruction_following": score,
+                    "helpfulness": score,
+                    "coherence": score,
+                    "safety": score,
                 },
             )
         
@@ -258,7 +258,7 @@ class TestCouncilChunkedEvaluation:
                 member_scores=[],
                 summary="chunk",
                 recommendations=["Improve formatting", "Be more concise"],
-                breakdown={"role_adherence": 0.7, "response_quality": 0.7, "consistency": 0.7, "constraint_compliance": 0.7},
+                breakdown={"instruction_following": 0.7, "helpfulness": 0.7, "coherence": 0.7, "safety": 0.7},
             )
 
         outputs = [{"test_id": f"t{i}", "prompt": "p", "response": "r", "expected": "e"} for i in range(60)]

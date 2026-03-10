@@ -1,5 +1,6 @@
 """PromptLab CLI - Main entry point."""
 
+import sys
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -8,6 +9,11 @@ from typing import Optional
 import yaml
 
 from promptlab import __version__
+
+
+def _is_interactive() -> bool:
+    """Check if we're running in an interactive terminal."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 # Initialize Typer app
 app = typer.Typer(
@@ -796,6 +802,7 @@ def validate_bsp(
     output_json: str = typer.Option(None, "--output", "-o", help="Save validation result to JSON file"),
     generate: int = typer.Option(None, "--generate", "-g", help="Auto-generate N test cases via web scraping (default: 50 if no tests exist)"),
     no_generate: bool = typer.Option(False, "--no-generate", help="Disable auto-generation even if no tests exist"),
+    no_interactive: bool = typer.Option(False, "--no-interactive", help="Skip interactive model selection (use config defaults)"),
 ):
     """Validate your Behavior Specification Prompt (BSP) against test cases.
     
@@ -822,6 +829,7 @@ def validate_bsp(
     from promptlab.orchestrators.bsp_validator import BSPValidator
     from promptlab.orchestrators.baseline import BaselineManager
     from promptlab.utils.git_integration import GitIntegration
+    from promptlab.utils.model_selector import discover_models, run_model_selection
     
     cwd = Path.cwd()
     config_path = _ensure_initialized(cwd)
@@ -829,6 +837,29 @@ def validate_bsp(
     
     # Load config
     config = load_config(config_path)
+    
+    # ── Interactive model/role selection ──
+    # In CI mode or with --no-interactive, skip the interactive UI
+    skip_interactive = ci or no_interactive
+    if config.council.enabled and not skip_interactive and _is_interactive():
+        try:
+            # Step 1: Discover models (async — needs an event loop)
+            _loop = asyncio.new_event_loop()
+            try:
+                available = _loop.run_until_complete(discover_models(config))
+            finally:
+                _loop.close()
+
+            # Step 2: InquirerPy interactive selection (sync — NO event loop running)
+            judges, chairman = run_model_selection(config, available)
+
+            # Apply user selections back to config
+            if judges:
+                config.council.members = judges
+            if chairman:
+                config.council.chairman = chairman
+        except Exception as e:
+            console.print(f"[yellow]Interactive selection failed ({e}) — using config defaults[/yellow]")
     
     # Check if BSP is configured
     bsp = load_bsp(config, cwd)
@@ -849,7 +880,48 @@ def validate_bsp(
         effective_count = 50
     
     gen_mode = config.bsp.generation_mode if config.bsp else "web"
-    
+
+    # ── Interactive generation-mode selection (InquirerPy) ──
+    if not no_generate and not skip_interactive and _is_interactive():
+        try:
+            from InquirerPy import inquirer
+            from InquirerPy.separator import Separator
+
+            mode_choices = [
+                {
+                    "name": "web       — Scrape web pages -> regex extract Q&A / cloze tests (fast)",
+                    "value": "web",
+                },
+                {
+                    "name": "docs_web  — Download docs -> index -> retrieve -> generate (higher quality)",
+                    "value": "docs_web",
+                },
+                {
+                    "name": "hybrid    — docs_web first, web scraping fallback if target not met",
+                    "value": "hybrid",
+                },
+            ]
+
+            selected_mode = inquirer.select(
+                message="Select test generation mode:",
+                choices=mode_choices,
+                default=gen_mode,
+                cycle=True,
+                instruction="(arrow keys to navigate, Enter to confirm)",
+            ).execute()
+
+            if selected_mode:
+                gen_mode = selected_mode
+                if config.bsp:
+                    config.bsp.generation_mode = gen_mode
+                console.print(f"[dim]Generation mode: {gen_mode}[/dim]\n")
+        except ImportError:
+            console.print("[dim]InquirerPy not installed — using config default mode[/dim]")
+        except (KeyboardInterrupt, EOFError):
+            console.print("[dim]Mode selection cancelled — using config default[/dim]")
+        except Exception:
+            pass  # fall through to config default
+
     console.print(Panel(
         f"[bold]BSP Version:[/bold] {config.bsp.version if config.bsp else 'default'}\n"
         f"[bold]Model:[/bold] {config.models.default}\n"
@@ -892,28 +964,33 @@ def validate_bsp(
         return result, validator, bsp_suggestion
     
     try:
-        result, validator, bsp_suggestion = asyncio.run(run_validation())
+        # Use a fresh event loop to avoid "Event loop is closed" on Windows
+        _val_loop = asyncio.new_event_loop()
+        try:
+            result, validator, bsp_suggestion = _val_loop.run_until_complete(run_validation())
+        finally:
+            _val_loop.close()
         
         # Record evaluation history
         from promptlab.utils.history import EvaluationHistory
         history = EvaluationHistory(cwd)
         
         # Extract detailed scores if available
-        role_adherence = 0.0
-        response_quality = 0.0
-        consistency = 0.0
+        instruction_following = 0.0
+        helpfulness = 0.0
+        coherence = 0.0
         confidence = "medium"
         weak_areas = []
         
         if result.council_result:
             confidence = result.council_result.confidence
             # Try to extract subscores if they exist
-            if hasattr(result.council_result, 'role_adherence'):
-                role_adherence = result.council_result.role_adherence
-            if hasattr(result.council_result, 'response_quality'):
-                response_quality = result.council_result.response_quality
-            if hasattr(result.council_result, 'consistency'):
-                consistency = result.council_result.consistency
+            if hasattr(result.council_result, 'instruction_following'):
+                instruction_following = result.council_result.instruction_following
+            if hasattr(result.council_result, 'helpfulness'):
+                helpfulness = result.council_result.helpfulness
+            if hasattr(result.council_result, 'coherence'):
+                coherence = result.council_result.coherence
             if hasattr(result.council_result, 'weak_areas'):
                 weak_areas = result.council_result.weak_areas or []
         
@@ -922,9 +999,9 @@ def validate_bsp(
             bsp_version=result.bsp_version or config.bsp.version if config.bsp else "1.0.0",
             bsp_hash=result.bsp_hash[:16] if result.bsp_hash else "",
             model=result.model or config.models.default,
-            role_adherence=role_adherence,
-            response_quality=response_quality,
-            consistency=consistency,
+            instruction_following=instruction_following,
+            helpfulness=helpfulness,
+            coherence=coherence,
             confidence=confidence,
             total_tests=result.total_tests,
             weak_areas=weak_areas,

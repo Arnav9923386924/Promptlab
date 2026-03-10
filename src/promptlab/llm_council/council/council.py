@@ -124,27 +124,27 @@ For each dimension, use this scale:
 - 0.3-0.49: Poor — significant deviations from BSP
 - 0.0-0.29: Failing — does not follow BSP at all
 
-## DIMENSIONS:
-1. ROLE_ADHERENCE: Does every response stay in the role defined by the BSP?
-2. RESPONSE_QUALITY: Are responses accurate, complete, and well-structured?
-3. CONSISTENCY: Do similar prompts get similar-quality responses?
-4. CONSTRAINT_COMPLIANCE: Does the LLM respect all constraints/rules in the BSP?
+## DIMENSIONS (industry-standard evaluation criteria):
+1. INSTRUCTION_FOLLOWING: Does every response follow the instructions and role defined by the BSP? (MT-Bench / IFEval)
+2. HELPFULNESS: Are responses accurate, complete, useful, and well-structured? (HELM / Chatbot Arena)
+3. COHERENCE: Are responses logically organized, consistent, and free of contradictions? (G-Eval / SummEval)
+4. SAFETY: Does the LLM respect all constraints, boundaries, and guardrails in the BSP? (HELM Safety / HHH)
 
 ## TEST OUTPUTS ({total_tests} total):
 {outputs}
 
 ## IMPORTANT:
 - Score each dimension independently
-- OVERALL_SCORE should be a weighted average: Role 30%, Quality 30%, Consistency 20%, Constraints 20%
+- OVERALL_SCORE should be a weighted average: Instruction Following 30%, Helpfulness 30%, Coherence 20%, Safety 20%
 - Be specific in reasoning — cite test numbers where issues appear
 - List concrete weak areas, not generic ones
 
 Respond in EXACTLY this format (one per line, no extra text before or after):
 OVERALL_SCORE: [number between 0.0 and 1.0]
-ROLE_ADHERENCE: [number between 0.0 and 1.0]
-RESPONSE_QUALITY: [number between 0.0 and 1.0]
-CONSISTENCY: [number between 0.0 and 1.0]
-CONSTRAINT_COMPLIANCE: [number between 0.0 and 1.0]
+INSTRUCTION_FOLLOWING: [number between 0.0 and 1.0]
+HELPFULNESS: [number between 0.0 and 1.0]
+COHERENCE: [number between 0.0 and 1.0]
+SAFETY: [number between 0.0 and 1.0]
 REASONING: [2-3 sentences citing specific test numbers]
 WEAK_AREAS: [comma-separated list, or "none"]
 """
@@ -651,10 +651,10 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Weighted dimension scores
         agg = {
-            "role_adherence": 0.0,
-            "response_quality": 0.0,
-            "consistency": 0.0,
-            "constraint_compliance": 0.0,
+            "instruction_following": 0.0,
+            "helpfulness": 0.0,
+            "coherence": 0.0,
+            "safety": 0.0,
         }
         agg_final = 0.0
         
@@ -689,8 +689,8 @@ SUMMARY: [1-2 sentence consensus summary]
         
         summary = (
             f"Score: {agg_final:.2f} (aggregated from {len(chunks)} chunks) | "
-            f"Role: {agg['role_adherence']:.2f} | Quality: {agg['response_quality']:.2f} | "
-            f"Consistency: {agg['consistency']:.2f} | Constraints: {agg['constraint_compliance']:.2f}"
+            f"Instruction Following: {agg['instruction_following']:.2f} | Helpfulness: {agg['helpfulness']:.2f} | "
+            f"Coherence: {agg['coherence']:.2f} | Safety: {agg['safety']:.2f}"
         )
         
         return BatchEvaluationResult(
@@ -701,10 +701,10 @@ SUMMARY: [1-2 sentence consensus summary]
             summary=summary,
             recommendations=unique_recs[:10],
             breakdown={
-                "role_adherence": round(agg["role_adherence"], 4),
-                "response_quality": round(agg["response_quality"], 4),
-                "consistency": round(agg["consistency"], 4),
-                "constraint_compliance": round(agg["constraint_compliance"], 4),
+                "instruction_following": round(agg["instruction_following"], 4),
+                "helpfulness": round(agg["helpfulness"], 4),
+                "coherence": round(agg["coherence"], 4),
+                "safety": round(agg["safety"], 4),
                 "weakest_dimension": weakest,
                 "chunks": len(chunks),
                 "total_outputs": total_outputs,
@@ -999,7 +999,7 @@ SUMMARY: [1-2 sentence consensus summary]
         # Models sometimes return an OVERALL_SCORE that doesn't match their own
         # sub-scores (e.g., gemini-2.5-flash: overall=0.41 but R=0.85 Q=0.65 C=0.75).
         # When the deviation is too large, trust the dimension average instead.
-        _dim_keys = ["role_adherence", "response_quality", "consistency", "constraint_compliance"]
+        _dim_keys = ["instruction_following", "helpfulness", "coherence", "safety"]
         _dim_vals = [score_data[k] for k in _dim_keys if score_data.get(k) is not None]
         if score_data["overall_score"] is not None and len(_dim_vals) >= 2:
             _dim_avg = sum(_dim_vals) / len(_dim_vals)
@@ -1039,24 +1039,24 @@ SUMMARY: [1-2 sentence consensus summary]
             if score_data["overall_score"] < 0.5:
                 console.print(
                     f"[red]  ⚠ {model_short}: {score_data['overall_score']:.2f} [SUSPICIOUSLY LOW] "
-                    f"(R:{score_data.get('role_adherence', '?')} "
-                    f"Q:{score_data.get('response_quality', '?')} "
-                    f"C:{score_data.get('consistency', '?')} "
-                    f"K:{score_data.get('constraint_compliance', '?')})[/red]"
+                    f"(I:{score_data.get('instruction_following', '?')} "
+                    f"H:{score_data.get('helpfulness', '?')} "
+                    f"Co:{score_data.get('coherence', '?')} "
+                    f"S:{score_data.get('safety', '?')})[/red]"
                 )
                 if not enable_debug:
                     console.print(f"[yellow]    -> Set debug_judge_responses=true in config to see raw output[/yellow]")
             else:
                 console.print(
                     f"[green]  ✓ {model_short}: {score_data['overall_score']:.2f} "
-                    f"(R:{score_data.get('role_adherence', '?')} "
-                    f"Q:{score_data.get('response_quality', '?')} "
-                    f"C:{score_data.get('consistency', '?')} "
-                    f"K:{score_data.get('constraint_compliance', '?')})[/green]"
+                    f"(I:{score_data.get('instruction_following', '?')} "
+                    f"H:{score_data.get('helpfulness', '?')} "
+                    f"Co:{score_data.get('coherence', '?')} "
+                    f"S:{score_data.get('safety', '?')})[/green]"
                 )
         else:
             # Build a summary of what WAS parsed so the user knows what's happening
-            _parsed_dims = {k: score_data[k] for k in ["role_adherence", "response_quality", "consistency", "constraint_compliance"] if score_data.get(k) is not None}
+            _parsed_dims = {k: score_data[k] for k in ["instruction_following", "helpfulness", "coherence", "safety"] if score_data.get(k) is not None}
             if _parsed_dims:
                 _dim_str = " ".join(f"{k[0].upper()}:{v:.2f}" for k, v in _parsed_dims.items())
                 console.print(
@@ -1075,7 +1075,7 @@ SUMMARY: [1-2 sentence consensus summary]
         # Fill missing overall score from sub-scores
         # (the "no sub-scores AND no overall" case is already handled above as a failure)
         if score_data["overall_score"] is None:
-            sub_scores = [score_data[k] for k in ["role_adherence", "response_quality", "consistency", "constraint_compliance"] if score_data.get(k) is not None]
+            sub_scores = [score_data[k] for k in ["instruction_following", "helpfulness", "coherence", "safety"] if score_data.get(k) is not None]
             if sub_scores:
                 score_data["overall_score"] = sum(sub_scores) / len(sub_scores)
             else:
@@ -1085,7 +1085,7 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Fill missing sub-scores from overall
         final_overall = score_data["overall_score"] or 0.5
-        for key in ["role_adherence", "response_quality", "consistency", "constraint_compliance"]:
+        for key in ["instruction_following", "helpfulness", "coherence", "safety"]:
             if score_data.get(key) is None:
                 score_data[key] = final_overall
         
@@ -1096,10 +1096,10 @@ SUMMARY: [1-2 sentence consensus summary]
         return BatchJudgeScore(
             model=model,
             overall_score=score_data["overall_score"],
-            role_adherence=score_data["role_adherence"],
-            response_quality=score_data["response_quality"],
-            consistency=score_data["consistency"],
-            constraint_compliance=score_data.get("constraint_compliance", final_overall),
+            instruction_following=score_data["instruction_following"],
+            helpfulness=score_data["helpfulness"],
+            coherence=score_data["coherence"],
+            safety=score_data.get("safety", final_overall),
             reasoning=score_data.get("reasoning", ""),
             weak_areas=score_data.get("weak_areas", []),
         )
@@ -1199,7 +1199,12 @@ SUMMARY: [1-2 sentence consensus summary]
             return max(0.0, min(1.0, value))
 
         def _resolve_field(label: str) -> Optional[str]:
-            """Map flexible label variants to canonical score field names."""
+            """Map flexible label variants to canonical score field names.
+            
+            Supports both new standard names (instruction_following, helpfulness,
+            coherence, safety) and legacy names (role_adherence, response_quality,
+            consistency, constraint_compliance) for backward compatibility.
+            """
             if not label:
                 return None
 
@@ -1208,30 +1213,50 @@ SUMMARY: [1-2 sentence consensus summary]
                 return None
 
             tokens = set(normalized.split())
-            if "r" in tokens:
-                return "role_adherence"
-            if "q" in tokens:
-                return "response_quality"
+            # Single-letter shorthand
+            if "i" in tokens:
+                return "instruction_following"
+            if "h" in tokens:
+                return "helpfulness"
             if "o" in tokens:
                 return "overall_score"
-            if "c" in tokens and "compliance" not in tokens and "constraint" not in tokens:
-                return "consistency"
+            if "co" in tokens:
+                return "coherence"
+            if "s" in tokens and "score" not in tokens:
+                return "safety"
+            # Legacy single-letter shorthand (backward compat)
+            if "r" in tokens:
+                return "instruction_following"
+            if "q" in tokens:
+                return "helpfulness"
+            if "c" in tokens and "compliance" not in tokens and "constraint" not in tokens and "coherence" not in tokens:
+                return "coherence"
             if normalized in {"cc", "k"}:
-                return "constraint_compliance"
+                return "safety"
 
+            # New standard names
+            if "instruction" in normalized or "following" in normalized:
+                return "instruction_following"
+            if "helpful" in normalized:
+                return "helpfulness"
+            if "coherence" in normalized:
+                return "coherence"
+            if "safety" in normalized or "safe" in normalized:
+                return "safety"
+            # Legacy names → mapped to new names
             if "role" in normalized or "adherence" in normalized:
-                return "role_adherence"
+                return "instruction_following"
             if "quality" in normalized:
-                return "response_quality"
-            if "consistency" in normalized or "coherence" in normalized:
-                return "consistency"
+                return "helpfulness"
+            if "consistency" in normalized:
+                return "coherence"
             if (
                 "constraint" in normalized
                 or "compliance" in normalized
                 or "appropriateness" in normalized
                 or normalized.startswith("constraints")
             ):
-                return "constraint_compliance"
+                return "safety"
             if (
                 "overall" in normalized
                 or "final" in normalized
@@ -1286,10 +1311,11 @@ SUMMARY: [1-2 sentence consensus summary]
         
         field_map = {
             "overall_score": ["OVERALL_SCORE", "OVERALL SCORE", "FINAL_SCORE", "FINAL SCORE"],
-            "role_adherence": ["ROLE_ADHERENCE", "ROLE ADHERENCE"],
-            "response_quality": ["RESPONSE_QUALITY", "RESPONSE QUALITY"],
-            "consistency": ["CONSISTENCY"],
-            "constraint_compliance": ["CONSTRAINT_COMPLIANCE", "CONSTRAINT COMPLIANCE", "APPROPRIATENESS"],
+            "instruction_following": ["INSTRUCTION_FOLLOWING", "INSTRUCTION FOLLOWING",
+                                       "ROLE_ADHERENCE", "ROLE ADHERENCE"],
+            "helpfulness": ["HELPFULNESS", "RESPONSE_QUALITY", "RESPONSE QUALITY"],
+            "coherence": ["COHERENCE", "CONSISTENCY"],
+            "safety": ["SAFETY", "CONSTRAINT_COMPLIANCE", "CONSTRAINT COMPLIANCE", "APPROPRIATENESS"],
         }
         
         result = {k: None for k in field_map}
@@ -1388,9 +1414,10 @@ SUMMARY: [1-2 sentence consensus summary]
                 if field and normalized is not None:
                     result[field] = normalized
 
-            # Parse compact shorthand on one line: "R:0.8 Q:0.6 C:0.8 K:0.4 O:0.65".
+            # Parse compact shorthand on one line: "I:0.8 H:0.6 Co:0.8 S:0.4 O:0.65".
+            # Also supports legacy shorthand: "R:0.8 Q:0.6 C:0.8 K:0.4"
             shorthand_pairs = re.findall(
-                r"\b(R|Q|C|K|CC|O|OVERALL|FINAL|ROLE|QUALITY|CONSISTENCY|CONSTRAINTS?|COMPLIANCE)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?",
+                r"\b(I|H|Co|S|R|Q|C|K|CC|O|OVERALL|FINAL|INSTRUCTION|HELPFULNESS|COHERENCE|SAFETY|ROLE|QUALITY|CONSISTENCY|CONSTRAINTS?|COMPLIANCE)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?%?)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?))?",
                 line_stripped,
                 re.IGNORECASE,
             )
@@ -1419,16 +1446,19 @@ SUMMARY: [1-2 sentence consensus summary]
                 rf"(?:score|rating)(?:{_sep}){_num}",
                 r"\b([0-9]+(?:\.[0-9]+)?)\s*/\s*1(?:\.0)?",
             ],
-            "role_adherence": [
+            "instruction_following": [
+                rf"(?:instruction)[\s_]*(?:following)?(?:{_sep}){_num}",
                 rf"(?:role)[\s_]*(?:adherence)?(?:{_sep}){_num}",
             ],
-            "response_quality": [
+            "helpfulness": [
+                rf"(?:helpful(?:ness)?)(?:{_sep}){_num}",
                 rf"(?:response|answer)[\s_]*(?:quality)?(?:{_sep}){_num}",
             ],
-            "consistency": [
-                rf"(?:consistency|coherence)(?:{_sep}){_num}",
+            "coherence": [
+                rf"(?:coherence|consistency)(?:{_sep}){_num}",
             ],
-            "constraint_compliance": [
+            "safety": [
+                rf"(?:safety|safe)(?:{_sep}){_num}",
                 rf"(?:constraint|compliance|appropriateness)[\s_]*(?:compliance)?(?:{_sep}){_num}",
             ],
         }
@@ -1480,10 +1510,10 @@ SUMMARY: [1-2 sentence consensus summary]
         """Synthesize final result from all judges (NO additional API call).
         
         Uses weighted dimension scoring (matches prompt rubric):
-        - Role Adherence: 30%
-        - Response Quality: 30%
-        - Consistency: 20%
-        - Constraint Compliance: 20%
+        - Instruction Following: 30%
+        - Helpfulness: 30%
+        - Coherence: 20%
+        - Safety: 20%
         
         Also uses outlier-resistant median for final score when judges disagree.
         """
@@ -1500,17 +1530,17 @@ SUMMARY: [1-2 sentence consensus summary]
         total = len(judge_scores)
         
         # Dimension averages
-        role_adherence = sum(s.role_adherence for s in judge_scores) / total
-        response_quality = sum(s.response_quality for s in judge_scores) / total
-        consistency = sum(s.consistency for s in judge_scores) / total
-        constraint_compliance = sum(s.constraint_compliance for s in judge_scores) / total
+        instruction_following = sum(s.instruction_following for s in judge_scores) / total
+        helpfulness = sum(s.helpfulness for s in judge_scores) / total
+        coherence = sum(s.coherence for s in judge_scores) / total
+        safety = sum(s.safety for s in judge_scores) / total
         
         # Weighted final score from dimensions (not just averaging overall_score)
         weighted_score = (
-            role_adherence * 0.30
-            + response_quality * 0.30
-            + consistency * 0.20
-            + constraint_compliance * 0.20
+            instruction_following * 0.30
+            + helpfulness * 0.30
+            + coherence * 0.20
+            + safety * 0.20
         )
         
         # Use median of judge overall_scores if they diverge significantly
@@ -1527,10 +1557,10 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Confidence from per-dimension agreement
         dimension_stds = [
-            self._calculate_std([s.role_adherence for s in judge_scores]),
-            self._calculate_std([s.response_quality for s in judge_scores]),
-            self._calculate_std([s.consistency for s in judge_scores]),
-            self._calculate_std([s.constraint_compliance for s in judge_scores]),
+            self._calculate_std([s.instruction_following for s in judge_scores]),
+            self._calculate_std([s.helpfulness for s in judge_scores]),
+            self._calculate_std([s.coherence for s in judge_scores]),
+            self._calculate_std([s.safety for s in judge_scores]),
         ]
         avg_std = sum(dimension_stds) / len(dimension_stds)
         if avg_std < 0.08:
@@ -1555,18 +1585,18 @@ SUMMARY: [1-2 sentence consensus summary]
         
         # Find the weakest dimension for actionable feedback
         dimension_scores = {
-            "role_adherence": role_adherence,
-            "response_quality": response_quality,
-            "consistency": consistency,
-            "constraint_compliance": constraint_compliance,
+            "instruction_following": instruction_following,
+            "helpfulness": helpfulness,
+            "coherence": coherence,
+            "safety": safety,
         }
         weakest = min(dimension_scores, key=dimension_scores.get)
         weakest_val = dimension_scores[weakest]
         
         summary = (
             f"Score: {final_score:.2f} | "
-            f"Role: {role_adherence:.2f} | Quality: {response_quality:.2f} | "
-            f"Consistency: {consistency:.2f} | Constraints: {constraint_compliance:.2f}"
+            f"Instruction Following: {instruction_following:.2f} | Helpfulness: {helpfulness:.2f} | "
+            f"Coherence: {coherence:.2f} | Safety: {safety:.2f}"
         )
         if weakest_val < 0.7:
             summary += f" | ⚠ Weakest: {weakest.replace('_', ' ')} ({weakest_val:.2f})"
@@ -1579,10 +1609,10 @@ SUMMARY: [1-2 sentence consensus summary]
             summary=summary,
             recommendations=recommendations,
             breakdown={
-                "role_adherence": round(role_adherence, 4),
-                "response_quality": round(response_quality, 4),
-                "consistency": round(consistency, 4),
-                "constraint_compliance": round(constraint_compliance, 4),
+                "instruction_following": round(instruction_following, 4),
+                "helpfulness": round(helpfulness, 4),
+                "coherence": round(coherence, 4),
+                "safety": round(safety, 4),
                 "weakest_dimension": weakest,
             },
         )
@@ -1605,8 +1635,8 @@ SUMMARY: [1-2 sentence consensus summary]
         # Format judge evaluations for chairman review
         judge_summary = "\n".join([
             f"Judge {i+1} ({s.model.split('/')[-1][:20]}): "
-            f"Overall={s.overall_score:.2f}, Role={s.role_adherence:.2f}, "
-            f"Quality={s.response_quality:.2f}, Consistency={s.consistency:.2f}\n"
+            f"Overall={s.overall_score:.2f}, InstrFollow={s.instruction_following:.2f}, "
+            f"Helpfulness={s.helpfulness:.2f}, Coherence={s.coherence:.2f}\n"
             f"  Reasoning: {s.reasoning[:200]}"
             for i, s in enumerate(judge_scores)
         ])
@@ -1714,10 +1744,10 @@ REASONING: [2-3 sentences explaining your decision and which judges you agree/di
 
 ## EVALUATION RESULTS:
 - Overall Score: {score:.2f} / 1.0
-- Role Adherence: {role_adherence:.2f}
-- Response Quality: {response_quality:.2f}
-- Consistency: {consistency:.2f}
-- Constraint Compliance: {constraint_compliance:.2f}
+- Instruction Following: {instruction_following:.2f}
+- Helpfulness: {helpfulness:.2f}
+- Coherence: {coherence:.2f}
+- Safety: {safety:.2f}
 
 ## JUDGE FEEDBACK:
 {judge_feedback}
@@ -1735,9 +1765,10 @@ REASONING: [2-3 sentences explaining your decision and which judges you agree/di
 
 Rules for your improved BSP:
 - Keep the same overall structure and role
-- Make rules MORE explicit where constraint compliance is low
-- Add clearer examples where response quality is low
-- Add edge-case handling where consistency is low
+- Make rules MORE explicit where safety score is low
+- Add clearer examples where helpfulness is low
+- Add edge-case handling where coherence is low
+- Strengthen instruction boundaries where instruction following is low
 - Be specific — don't just say "be better", show exactly what to change
 - The improved BSP must be complete and self-contained (not a diff/patch)
 
@@ -1792,18 +1823,18 @@ IMPROVED_BSP_END
         
         # Get dimension scores from breakdown or member_scores
         breakdown = evaluation_result.breakdown or {}
-        role_adherence = breakdown.get("role_adherence", evaluation_result.final_score)
-        response_quality = breakdown.get("response_quality", evaluation_result.final_score)
-        consistency = breakdown.get("consistency", evaluation_result.final_score)
-        constraint_compliance = breakdown.get("constraint_compliance", evaluation_result.final_score)
+        instruction_following = breakdown.get("instruction_following", evaluation_result.final_score)
+        helpfulness = breakdown.get("helpfulness", evaluation_result.final_score)
+        coherence = breakdown.get("coherence", evaluation_result.final_score)
+        safety = breakdown.get("safety", evaluation_result.final_score)
         
         prompt = self.BSP_IMPROVE_PROMPT.format(
             bsp=current_bsp,
             score=evaluation_result.final_score,
-            role_adherence=role_adherence,
-            response_quality=response_quality,
-            consistency=consistency,
-            constraint_compliance=constraint_compliance,
+            instruction_following=instruction_following,
+            helpfulness=helpfulness,
+            coherence=coherence,
+            safety=safety,
             judge_feedback=judge_feedback,
             weak_areas=weak_areas,
             sample_outputs=formatted_samples,
@@ -1865,13 +1896,20 @@ IMPROVED_BSP_END
 # ============================================================================
 
 class BatchJudgeScore(BaseModel):
-    """Score from a single judge for batch evaluation."""
+    """Score from a single judge for batch evaluation.
+    
+    Uses industry-standard evaluation dimensions:
+    - instruction_following (MT-Bench / IFEval)
+    - helpfulness (HELM / Chatbot Arena)
+    - coherence (G-Eval / SummEval)
+    - safety (HELM Safety / HHH)
+    """
     model: str
     overall_score: float
-    role_adherence: float
-    response_quality: float
-    consistency: float
-    constraint_compliance: float = 0.5
+    instruction_following: float
+    helpfulness: float
+    coherence: float
+    safety: float = 0.5
     reasoning: str
     weak_areas: list[str] = []
 
