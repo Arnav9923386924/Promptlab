@@ -856,6 +856,12 @@ def validate_bsp(
             # Apply user selections back to config
             if judges:
                 config.council.members = judges
+                # Auto-update required_judges to use ALL selected judges
+                # (by default required_judges is 2, but if user picks 5 judges, use all 5)
+                config.council.required_judges = len(judges)
+                # CRITICAL: Disable model pool fallback — ONLY use user-selected models
+                config.council.use_fixed_judges = True
+                console.print(f"[dim]Updated: required_judges={len(judges)}, use_fixed_judges=True (strict mode)[/dim]")
             if chairman:
                 config.council.chairman = chairman
         except Exception as e:
@@ -921,6 +927,69 @@ def validate_bsp(
             console.print("[dim]Mode selection cancelled — using config default[/dim]")
         except Exception:
             pass  # fall through to config default
+
+    # ── Interactive: ask whether to regenerate tests if they already exist ──
+    force_regenerate = False
+    if not no_generate and not skip_interactive and _is_interactive():
+        from promptlab.orchestrators.parser import discover_test_files
+        existing_tests = discover_test_files(test_path)
+        if existing_tests:
+            try:
+                from InquirerPy import inquirer
+
+                console.print(f"\n[bold]Found {len(existing_tests)} existing test file(s) in {test_path}[/bold]")
+                regen = inquirer.confirm(
+                    message="Generate new test cases? (existing tests will be removed)",
+                    default=False,
+                ).execute()
+
+                if regen:
+                    # Ask how many tests to generate
+                    count_input = inquirer.number(
+                        message="How many test cases to generate?",
+                        default=effective_count,
+                        min_allowed=15,
+                        max_allowed=500,
+                    ).execute()
+                    effective_count = int(count_input)
+                    force_regenerate = True
+
+                    # Remove old test files
+                    for f in existing_tests:
+                        try:
+                            f.unlink()
+                        except Exception:
+                            pass
+                    console.print(f"[dim]Removed {len(existing_tests)} old test file(s). Will generate {effective_count} new tests.[/dim]\n")
+                else:
+                    console.print(f"[dim]Using {len(existing_tests)} existing test file(s).[/dim]\n")
+                    no_generate = True  # skip auto-generation since user wants existing tests
+            except ImportError:
+                pass
+            except (KeyboardInterrupt, EOFError):
+                console.print("[dim]Cancelled — using existing tests[/dim]")
+                no_generate = True
+            except Exception:
+                pass
+        else:
+            # No existing tests — ask for count
+            try:
+                from InquirerPy import inquirer
+
+                console.print(f"\n[bold]No existing test files in {test_path}[/bold]")
+                count_input = inquirer.number(
+                    message="How many test cases to generate?",
+                    default=effective_count,
+                    min_allowed=15,
+                    max_allowed=500,
+                ).execute()
+                effective_count = int(count_input)
+            except ImportError:
+                pass
+            except (KeyboardInterrupt, EOFError):
+                console.print("[dim]Using default count[/dim]")
+            except Exception:
+                pass
 
     console.print(Panel(
         f"[bold]BSP Version:[/bold] {config.bsp.version if config.bsp else 'default'}\n"
