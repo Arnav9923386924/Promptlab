@@ -105,6 +105,31 @@ async def _list_google_models(api_key: str) -> list[dict]:
     return models
 
 
+async def _list_ollama_models(endpoint: str) -> list[dict]:
+    """Fetch locally installed models from Ollama (e.g. llama3:8b)."""
+    import httpx
+
+    models: list[dict] = []
+    base = (endpoint or "http://localhost:11434").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{base}/api/tags")
+            resp.raise_for_status()
+            for entry in resp.json().get("models", []):
+                model_name = entry.get("name") or entry.get("model") or ""
+                if not model_name:
+                    continue
+                models.append({
+                    "id": f"ollama/{model_name}",
+                    "name": model_name,
+                    "provider": "Ollama",
+                    "context": 0,
+                })
+    except Exception as e:
+        console.print(f"[yellow]  Warning: Ollama model fetch failed: {str(e)[:80]}[/yellow]")
+    return models
+
+
 def _list_static_provider_models(provider_name: str) -> list[dict]:
     """Return well-known models for providers that don't have a list API.
 
@@ -167,6 +192,10 @@ async def discover_models(config) -> list[dict]:
     google_cfg = providers.get("google")
     if google_cfg and google_cfg.api_key and len(google_cfg.api_key) > 10:
         tasks.append(_list_google_models(google_cfg.api_key))
+
+    ollama_cfg = providers.get("ollama")
+    if ollama_cfg is not None:
+        tasks.append(_list_ollama_models(ollama_cfg.endpoint or "http://localhost:11434"))
 
     # Fetch dynamic providers in parallel
     if tasks:
