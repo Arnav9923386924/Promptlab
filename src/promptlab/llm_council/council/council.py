@@ -202,6 +202,7 @@ SUMMARY: [1-2 sentence consensus summary]
         self.llm_runner = llm_runner
         self.members = config.get("members", [])
         self.chairman = config.get("chairman", self.members[0] if self.members else None)
+        self.model_roles = config.get("model_roles", {})
         self.mode = config.get("mode", "fast")
         
         # Initialize attempts logger
@@ -737,7 +738,7 @@ SUMMARY: [1-2 sentence consensus summary]
         outputs_text = self._format_batch_outputs(outputs)
         
         prompt = self.BATCH_JUDGE_PROMPT.format(
-            bsp=bsp[:1500] if bsp else "No BSP specified",
+            bsp=bsp[:4000] if bsp else "No BSP specified",
             outputs=outputs_text,
             total_tests=len(outputs),
         )
@@ -780,7 +781,8 @@ SUMMARY: [1-2 sentence consensus summary]
                 self.attempts_logger.log_attempt_start(model, is_configured)
             
             try:
-                score = await self._get_batch_judge_score_with_retry(model, prompt)
+                role_hint = self.model_roles.get(model, "")
+                score = await self._get_batch_judge_score_with_retry(model, prompt, role_hint=role_hint)
                 judge_results.append(score)
                 if self.model_pool:
                     self.model_pool.mark_used(model)
@@ -908,14 +910,14 @@ SUMMARY: [1-2 sentence consensus summary]
         
         formatted = []
         for i, out in enumerate(selected, 1):
-            prompt = out.get("prompt", "")[:200]
-            response = out.get("response", "")[:400]
+            prompt = out.get("prompt", "")[:350]
+            response = out.get("response", "")[:1200]
             expected = out.get("expected", "")
             test_id = out.get('test_id', f'test_{i}')
             
             entry = f"[Test {i}: {test_id}]\nPrompt: {prompt}\nResponse: {response}"
             if expected:
-                entry += f"\nExpected: {expected[:150]}"
+                entry += f"\nExpected: {expected[:300]}"
             formatted.append(entry)
         
         if len(outputs) > max_outputs:
@@ -955,19 +957,25 @@ SUMMARY: [1-2 sentence consensus summary]
         
         return selected[:max_outputs]
 
-    async def _get_batch_judge_score_with_retry(self, model: str, prompt: str, max_retries: int = 1) -> "BatchJudgeScore":
+    async def _get_batch_judge_score_with_retry(
+        self,
+        model: str,
+        prompt: str,
+        role_hint: str = "",
+        max_retries: int = 1,
+    ) -> "BatchJudgeScore":
         """Get batch judge score with retry on failure."""
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                return await self._get_batch_judge_score(model, prompt)
+                return await self._get_batch_judge_score(model, prompt, role_hint=role_hint)
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
                     await asyncio.sleep(3.0 * (attempt + 1))
         raise last_error
     
-    async def _get_batch_judge_score(self, model: str, prompt: str) -> "BatchJudgeScore":
+    async def _get_batch_judge_score(self, model: str, prompt: str, role_hint: str = "") -> "BatchJudgeScore":
         """Get batch score from a single judge (ONE API call for ALL outputs).
         
         Uses robust parsing with multiple fallback strategies:
@@ -979,7 +987,10 @@ SUMMARY: [1-2 sentence consensus summary]
         from rich.console import Console
         console = Console()
         
-        result = await self.llm_runner.complete(prompt, model=model, temperature=0, max_tokens=1500)
+        role_instruction = self._build_role_instruction(role_hint)
+        judge_prompt = f"{prompt}\n\n{role_instruction}" if role_instruction else prompt
+
+        result = await self.llm_runner.complete(judge_prompt, model=model, temperature=0, max_tokens=1800)
         text = result.text
         
         # --- Guard: reject empty / whitespace-only responses ---
@@ -1016,7 +1027,11 @@ SUMMARY: [1-2 sentence consensus summary]
         enable_debug = self.config.get("debug_judge_responses", False)
         if enable_debug:
             console.print(f"[dim]  DEBUG {model_short} raw response:[/dim]")
-            console.print(f"[dim]{text[:500]}...[/dim]")
+            preview_limit = 1200
+            preview = text[:preview_limit]
+            if len(text) > preview_limit:
+                preview += "\n... (truncated; full response saved to file)"
+            console.print(f"[dim]{preview}[/dim]")
             # Also dump full raw response to file for inspection
             try:
                 import os
@@ -1103,6 +1118,33 @@ SUMMARY: [1-2 sentence consensus summary]
             reasoning=score_data.get("reasoning", ""),
             weak_areas=score_data.get("weak_areas", []),
         )
+
+    def _build_role_instruction(self, role_hint: str) -> str:
+        """Return a role-specific judging instruction block for specialization."""
+        role = (role_hint or "").strip().lower()
+        role_map = {
+            "critic / reviewer agent": (
+                "JUDGE SPECIALIZATION: Critic/Reviewer\n"
+                "Prioritize depth and practical usefulness. Penalize shallow, vague, or generic responses."
+            ),
+            "fact-checker agent": (
+                "JUDGE SPECIALIZATION: Fact-Checker\n"
+                "Prioritize factual/legal correctness and internal factual consistency. Penalize incorrect legal claims."
+            ),
+            "consistency checker": (
+                "JUDGE SPECIALIZATION: Consistency Checker\n"
+                "Prioritize consistency across outputs, stable reasoning, and absence of contradictions."
+            ),
+            "scoring / judge agent": (
+                "JUDGE SPECIALIZATION: Scoring Judge\n"
+                "Prioritize strict rubric adherence and calibrated scoring across all dimensions."
+            ),
+            "safety / policy checker": (
+                "JUDGE SPECIALIZATION: Safety/Policy\n"
+                "Prioritize safe legal framing, non-advisory boundaries, and policy-compliant behavior."
+            ),
+        }
+        return role_map.get(role, "")
 
     @staticmethod
     def _sanitize_llm_response(text: str) -> str:

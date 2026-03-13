@@ -851,19 +851,22 @@ def validate_bsp(
                 _loop.close()
 
             # Step 2: InquirerPy interactive selection (sync — NO event loop running)
-            judges, chairman = run_model_selection(config, available)
+            judges, chairman, model_roles, require_all_selected, selected_required_judges = run_model_selection(config, available)
 
             # Apply user selections back to config
             if judges:
                 config.council.members = judges
-                # Auto-update required_judges to use ALL selected judges
-                # (by default required_judges is 2, but if user picks 5 judges, use all 5)
-                config.council.required_judges = len(judges)
-                # CRITICAL: Disable model pool fallback — ONLY use user-selected models
-                config.council.use_fixed_judges = True
-                console.print(f"[dim]Updated: required_judges={len(judges)}, use_fixed_judges=True (strict mode)[/dim]")
+                config.council.required_judges = selected_required_judges
+                config.council.use_fixed_judges = require_all_selected
+                mode_text = "strict" if require_all_selected else "flexible"
+                console.print(
+                    f"[dim]Updated: required_judges={selected_required_judges}, "
+                    f"use_fixed_judges={str(require_all_selected)} ({mode_text} mode)[/dim]"
+                )
             if chairman:
                 config.council.chairman = chairman
+            if model_roles:
+                config.council.model_roles = model_roles
         except Exception as e:
             console.print(f"[yellow]Interactive selection failed ({e}) — using config defaults[/yellow]")
     
@@ -1018,9 +1021,9 @@ def validate_bsp(
             generate_count=target_count,
         )
         
-        # If validation failed, ask chairman for BSP improvements (same event loop)
+        # Ask chairman for BSP improvements (same event loop), regardless of pass/fail.
         bsp_suggestion = None
-        if not result.passed and not ci and validator.council:
+        if not ci and validator.council:
             batch = getattr(validator, '_last_batch', None)
             council_res = result.council_result
             if batch and council_res:
@@ -1074,7 +1077,7 @@ def validate_bsp(
             confidence=confidence,
             total_tests=result.total_tests,
             weak_areas=weak_areas,
-            notes=f"Baseline: {result.baseline_score:.2f}" if result.baseline_score else "",
+            notes=f"Baseline: {result.baseline_score:.5f}" if result.baseline_score else "",
         )
         
         # Save baseline if improved
@@ -1119,8 +1122,8 @@ def validate_bsp(
         if result.passed:
             console.print(Panel(
                 f"[bold green]✓ Validation PASSED[/bold green]\n\n"
-                f"Score: {result.council_score:.2f}\n"
-                f"{'Improvement: ' + f'+{result.improvement:.2f}' if result.improvement and result.improvement > 0 else ''}\n"
+                f"Score: {result.council_score:.5f}\n"
+                f"{'Improvement: ' + f'+{result.improvement:.5f}' if result.improvement and result.improvement > 0 else ''}\n"
                 f"Outputs: {result.outputs_file}",
                 title="Success",
                 border_style="green",
@@ -1128,17 +1131,17 @@ def validate_bsp(
         else:
             console.print(Panel(
                 f"[bold red]✗ Validation FAILED[/bold red]\n\n"
-                f"Score: {result.council_score:.2f}\n"
-                f"Min Required: {config.bsp.min_score if config.bsp else 0.7}\n"
+                f"Score: {result.council_score:.5f}\n"
+                f"Min Required: {(config.bsp.min_score if config.bsp else 0.7):.5f}\n"
                 f"Outputs: {result.outputs_file}",
                 title="❌ Failed",
                 border_style="red",
             ))
         
         # ----------------------------------------------------------------
-        # BSP IMPROVEMENT SUGGESTION (when validation fails, non-CI only)
+        # BSP IMPROVEMENT SUGGESTION (non-CI only, regardless of pass/fail)
         # ----------------------------------------------------------------
-        if not result.passed and not ci and bsp_suggestion:
+        if not ci and bsp_suggestion:
             console.print()
             # Display suggested changes
             console.print(Panel(
@@ -1182,7 +1185,8 @@ def validate_bsp(
                     console.print(f"[green]✓ Updated {config.bsp.prompt_file} with improved BSP[/green]")
                     console.print("[yellow]  Run 'promptlab validate' again to check the new score.[/yellow]")
                 else:
-                    console.print("[dim]Keeping current BSP unchanged.[/dim]")
+                    console.print("[dim]BSP update declined - terminating without changes.[/dim]")
+                    raise typer.Exit(0)
             else:
                 console.print("[yellow]  ⚠ BSP is inline (not a file) — cannot auto-update. Copy the improved BSP manually.[/yellow]")
                 console.print(Panel(
@@ -1527,11 +1531,11 @@ def evaluate_conversation(
 
         # Display results
         console.print(Panel(
-            f"[bold]Overall Score:[/bold] {result.overall_score:.2f}\n"
-            f"[bold]Context Retention:[/bold] {result.context_retention_score:.2f}\n"
-            f"[bold]Role Consistency:[/bold] {result.role_consistency_score:.2f}\n"
-            f"[bold]Coherence:[/bold] {result.coherence_score:.2f}\n"
-            f"[bold]Personality Drift:[/bold] {result.personality_drift_score:.2f} (1.0 = no drift)\n"
+            f"[bold]Overall Score:[/bold] {result.overall_score:.5f}\n"
+            f"[bold]Context Retention:[/bold] {result.context_retention_score:.5f}\n"
+            f"[bold]Role Consistency:[/bold] {result.role_consistency_score:.5f}\n"
+            f"[bold]Coherence:[/bold] {result.coherence_score:.5f}\n"
+            f"[bold]Personality Drift:[/bold] {result.personality_drift_score:.5f} (1.0 = no drift)\n"
             f"\n{result.summary}",
             title="Conversation Evaluation",
             border_style="green" if result.overall_score >= 0.7 else "red",

@@ -3,7 +3,8 @@
 Presents a terminal UI for users to:
 1. Discover all available models from every configured provider
 2. Select N models via multi-select checkboxes
-3. Assign a role (Judge / Chairman) to each selected model
+3. Assign a council position (Judge / Chairman) to each selected model
+4. Assign a functional evaluation role to each selected model
 
 Falls back gracefully to config values when:
 - Running in non-interactive mode (CI, piped stdin)
@@ -22,8 +23,15 @@ from rich.table import Table
 
 console = Console()
 
-# ── Predefined roles for council models ──
+# ── Predefined council positions + functional evaluation roles ──
 AVAILABLE_ROLES = ["Judge", "Chairman"]
+AVAILABLE_FUNCTIONAL_ROLES = [
+    "Critic / Reviewer Agent",
+    "Fact-Checker Agent",
+    "Consistency Checker",
+    "Scoring / Judge Agent",
+    "Safety / Policy Checker",
+]
 
 
 def _is_interactive() -> bool:
@@ -249,37 +257,40 @@ async def discover_models(config) -> list[dict]:
 def run_model_selection(
     config,
     available: list[dict],
-) -> tuple[list[str], Optional[str]]:
+) -> tuple[list[str], Optional[str], dict[str, str], bool, int]:
     """Present InquirerPy UI for model + role selection.
 
     Flow:
       1. Multi-select checkbox: pick N models from the discovered list
-      2. For each selected model, pick a role (Judge / Chairman)
-      3. If no Chairman was assigned, prompt for one
-      4. Show a summary table
+            2. For each selected model, pick a council position (Judge / Chairman)
+            3. For each selected model, pick a functional evaluation role
+            4. If no Chairman was assigned, prompt for one
+            5. Show a summary table
 
     MUST be called **outside** any running asyncio event loop.
 
     Returns:
-        (judges, chairman) — lists of model ID strings
+        (judges, chairman, model_roles, require_all_selected, required_judges)
     """
     config_members = config.council.members
     config_chairman = config.council.chairman
-    required_judges = config.council.required_judges
+    config_model_roles = config.council.model_roles or {}
+    required_judges = max(2, int(config.council.required_judges or 2))
+    minimum_selection_judges = 2
 
     if not available:
-        return config_members, config_chairman
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     try:
         from InquirerPy import inquirer
         from InquirerPy.separator import Separator
     except ImportError:
         console.print("[yellow]InquirerPy not installed - using config defaults[/yellow]")
-        return config_members, config_chairman
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     if not _is_interactive():
         console.print("[dim]Non-interactive mode - using config defaults[/dim]")
-        return config_members, config_chairman
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     # ── Group models by provider for the checkbox ──
     by_provider: dict[str, list[dict]] = {}
@@ -304,7 +315,7 @@ def run_model_selection(
     # ── Step 1 — Select models (multi-select) ──
     console.print()
     console.print("[bold yellow]Use arrow keys to navigate, SPACE to toggle selection (green = selected), ENTER when done[/bold yellow]")
-    console.print(f"[dim]You need at least {required_judges} judges + 1 chairman (total: {required_judges + 1} models)[/dim]\n")
+    console.print(f"[dim]You need at least {minimum_selection_judges} judges + 1 chairman (total: {minimum_selection_judges + 1} models)[/dim]\n")
     
     try:
         selected_ids = inquirer.checkbox(
@@ -315,17 +326,17 @@ def run_model_selection(
         ).execute()
     except (KeyboardInterrupt, EOFError):
         console.print("[dim]Selection cancelled - using config defaults[/dim]")
-        return config_members, config_chairman
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     # Debug: show what was selected
     console.print(f"\n[dim]Selected {len(selected_ids)} models: {', '.join([m.split('/')[-1] for m in selected_ids])}[/dim]")
 
-    if not selected_ids or len(selected_ids) < required_judges + 1:
+    if not selected_ids or len(selected_ids) < minimum_selection_judges + 1:
         console.print(
-            f"[yellow]Need at least {required_judges} judges + 1 chairman "
-            f"({required_judges + 1} models). Using config defaults.[/yellow]"
+            f"[yellow]Need at least {minimum_selection_judges} judges + 1 chairman "
+            f"({minimum_selection_judges + 1} models). Using config defaults.[/yellow]"
         )
-        return config_members, config_chairman
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     # Build lookup for display names
     id_to_name = {m["id"]: m["name"] for m in available}
@@ -333,9 +344,10 @@ def run_model_selection(
     # ── Step 2 — Assign roles to each selected model ──
     judges: list[str] = []
     chairman: Optional[str] = None
+    model_roles: dict[str, str] = {}
 
     console.print()
-    console.print("[bold]Assign a role to each selected model:[/bold]")
+    console.print("[bold]Assign council position + functional role to each selected model:[/bold]")
 
     for mid in selected_ids:
         display = id_to_name.get(mid, mid.split("/")[-1])
@@ -351,9 +363,23 @@ def run_model_selection(
                 default=default_role,
                 cycle=True,
             ).execute()
+
+            default_fn_role = config_model_roles.get(mid)
+            if default_fn_role not in AVAILABLE_FUNCTIONAL_ROLES:
+                default_fn_role = (
+                    "Scoring / Judge Agent" if role == "Chairman" else "Critic / Reviewer Agent"
+                )
+            functional_role = inquirer.select(
+                message=f"    Functional role for {display}:",
+                choices=AVAILABLE_FUNCTIONAL_ROLES,
+                default=default_fn_role,
+                cycle=True,
+            ).execute()
         except (KeyboardInterrupt, EOFError):
             console.print("[dim]Role assignment cancelled - using config defaults[/dim]")
-            return config_members, config_chairman
+            return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
+
+        model_roles[mid] = functional_role
 
         if role == "Chairman":
             if chairman is not None:
@@ -384,26 +410,55 @@ def run_model_selection(
 
     # ── Validate minimum judges ──
     if len(judges) < required_judges:
-        console.print(
-            f"[yellow]Need at least {required_judges} judges. "
-            f"Got {len(judges)}. Using config defaults.[/yellow]"
-        )
-        return config_members, config_chairman
+        if len(judges) < minimum_selection_judges:
+            console.print(
+                f"[yellow]Need at least {minimum_selection_judges} judges. "
+                f"Got {len(judges)}. Using config defaults.[/yellow]"
+            )
+            return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
+
+    # ── Step 4 — Judge execution policy (strict vs flexible) ──
+    try:
+        require_all_selected = inquirer.confirm(
+            message="Require all selected judges to be callable? (strict mode)",
+            default=config.council.use_fixed_judges,
+        ).execute()
+
+        if require_all_selected:
+            selected_required_judges = len(judges)
+        else:
+            default_required = required_judges
+            if default_required > len(judges):
+                default_required = len(judges)
+            if default_required < minimum_selection_judges:
+                default_required = minimum_selection_judges
+            selected_required_judges = int(inquirer.number(
+                message="Minimum successful judges required:",
+                default=default_required,
+                min_allowed=minimum_selection_judges,
+                max_allowed=len(judges),
+            ).execute())
+    except (KeyboardInterrupt, EOFError):
+        console.print("[dim]Judge policy selection cancelled - using config defaults[/dim]")
+        return config_members, config_chairman, config_model_roles, config.council.use_fixed_judges, required_judges
 
     # ── Summary table ──
     console.print()
     table = Table(title="Council Configuration", border_style="cyan", show_lines=True)
     table.add_column("Model", style="bold white", min_width=30)
     table.add_column("Role", style="bold", min_width=12, justify="center")
+    table.add_column("Function", style="bold", min_width=24)
 
     for j in judges:
         name = id_to_name.get(j, j.split("/")[-1])
-        table.add_row(name, "[cyan]Judge[/cyan]")
+        table.add_row(name, "[cyan]Judge[/cyan]", model_roles.get(j, "Critic / Reviewer Agent"))
     if chairman:
         name = id_to_name.get(chairman, chairman.split("/")[-1])
-        table.add_row(name, "[yellow]Chairman[/yellow]")
+        table.add_row(name, "[yellow]Chairman[/yellow]", model_roles.get(chairman, "Scoring / Judge Agent"))
 
     console.print(table)
+    mode_text = "strict" if require_all_selected else "flexible"
+    console.print(f"[dim]Judge policy: {mode_text} (required_judges={selected_required_judges})[/dim]")
     console.print()
 
-    return judges, chairman
+    return judges, chairman, model_roles, require_all_selected, selected_required_judges

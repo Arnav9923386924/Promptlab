@@ -37,6 +37,7 @@ class CouncilConfig(BaseModel):
     mode: str = "fast"
     members: list[str] = []
     chairman: Optional[str] = None
+    model_roles: dict[str, str] = {}
     use_fixed_judges: bool = False
     debug_judge_responses: bool = False
     required_judges: int = 2  # Minimum number of successful judge scores required

@@ -290,8 +290,8 @@ class EvaluationHistory:
 
         lines.append(f"Evaluation History ({trend.total_evaluations} total evaluations)")
         lines.append(f"Trend: {trend.trend_direction}")
-        lines.append(f"Average Score: {trend.average_score:.2f}")
-        lines.append(f"Best: {trend.best_score:.2f} | Worst: {trend.worst_score:.2f}")
+        lines.append(f"Average Score: {trend.average_score:.5f}")
+        lines.append(f"Best: {trend.best_score:.5f} | Worst: {trend.worst_score:.5f}")
         lines.append("")
 
         # Recent entries
@@ -299,7 +299,7 @@ class EvaluationHistory:
         for entry in trend.entries[-5:]:
             ts = entry.timestamp[:19]  # Trim microseconds
             lines.append(
-                f"  {ts} | Score: {entry.overall_score:.2f} | "
+                f"  {ts} | Score: {entry.overall_score:.5f} | "
                 f"BSP: {entry.bsp_version} | Model: {entry.model}"
             )
 

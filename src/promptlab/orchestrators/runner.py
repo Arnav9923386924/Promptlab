@@ -57,6 +57,7 @@ class TestRunner:
                 {
                     "members": config.council.members,
                     "chairman": config.council.chairman,
+                    "model_roles": config.council.model_roles,
                     "mode": config.council.mode,
                     "required_judges": config.council.required_judges,
                     "use_fixed_judges": config.council.use_fixed_judges,

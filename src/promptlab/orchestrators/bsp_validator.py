@@ -305,6 +305,7 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
                 {
                     "members": config.council.members,
                     "chairman": config.council.chairman,
+                    "model_roles": config.council.model_roles,
                     "mode": config.council.mode,
                     "required_judges": config.council.required_judges,
                     "use_fixed_judges": config.council.use_fixed_judges,
@@ -883,7 +884,7 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         # Step 3: Council evaluation
         console.print("\n[bold cyan]Step 3: Council evaluation...[/bold cyan]")
         council_result = await self.evaluate_batch_with_council(batch)
-        console.print(f"[green]✓ Council score: {council_result.final_score:.2f}[/green]")
+        console.print(f"[green]✓ Council score: {council_result.final_score:.5f}[/green]")
         
         # Step 4: Compare with baseline
         console.print("\n[bold cyan]Step 4: Comparing with baseline...[/bold cyan]")
@@ -899,11 +900,11 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
             should_push = improvement > self.config.baseline.min_improvement
             
             if improvement > 0:
-                console.print(f"[green]✓ Improvement: +{improvement:.2f} ({baseline_score:.2f} → {council_result.final_score:.2f})[/green]")
+                console.print(f"[green]✓ Improvement: +{improvement:.5f} ({baseline_score:.5f} → {council_result.final_score:.5f})[/green]")
             elif improvement < 0:
-                console.print(f"[red]✗ Regression: {improvement:.2f} ({baseline_score:.2f} → {council_result.final_score:.2f})[/red]")
+                console.print(f"[red]✗ Regression: {improvement:.5f} ({baseline_score:.5f} → {council_result.final_score:.5f})[/red]")
             else:
-                console.print(f"[yellow]= No change: {council_result.final_score:.2f}[/yellow]")
+                console.print(f"[yellow]= No change: {council_result.final_score:.5f}[/yellow]")
         else:
             console.print("[yellow]No baseline found. This will be the first baseline.[/yellow]")
             should_push = council_result.passed
@@ -943,13 +944,13 @@ RECOMMENDATIONS: [Comma-separated list of improvement suggestions]
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="bold")
         
-        table.add_row("Council Score", f"{result.council_score:.2f}")
+        table.add_row("Council Score", f"{result.council_score:.5f}")
         table.add_row("Passed", "[green]Yes[/green]" if result.passed else "[red]No[/red]")
         table.add_row("Confidence", result.council_result.confidence if result.council_result else "N/A")
         
         if result.baseline_score is not None:
-            table.add_row("Baseline Score", f"{result.baseline_score:.2f}")
-            improvement_str = f"{result.improvement:+.2f}" if result.improvement else "0.00"
+            table.add_row("Baseline Score", f"{result.baseline_score:.5f}")
+            improvement_str = f"{result.improvement:+.5f}" if result.improvement else "0.00000"
             improvement_color = "green" if result.improvement and result.improvement > 0 else "red" if result.improvement and result.improvement < 0 else "yellow"
             table.add_row("Improvement", f"[{improvement_color}]{improvement_str}[/{improvement_color}]")
         
