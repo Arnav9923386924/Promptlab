@@ -418,6 +418,61 @@ logs/
 """
 
 
+def _bump_bsp_version(config_path: Path, console: Console) -> None:
+    """Auto-increment BSP patch version in promptlab.yaml.
+
+    Bumps ``bsp.version`` from e.g. "1.0.0" → "1.0.1" so that evaluation
+    history entries record the version change when a chairman BSP update
+    is accepted.  If the version string cannot be parsed, it is left
+    unchanged and a warning is printed.
+    """
+    import re as _re
+
+    if not config_path.exists():
+        return
+
+    text = config_path.read_text(encoding="utf-8")
+
+    # Match the version line under the bsp: section
+    # Handles:  version: "1.0.0"  or  version: '1.0.0'  or  version: 1.0.0
+    pattern = _re.compile(
+        r"^(\s*version:\s*)[\"']?(\d+\.\d+\.\d+)[\"']?\s*$",
+        _re.MULTILINE,
+    )
+
+    # We only want to replace the FIRST occurrence (the one under bsp:)
+    # To be safe, look for it after the "bsp:" section header
+    bsp_section_match = _re.search(r"^bsp:\s*$", text, _re.MULTILINE)
+    if not bsp_section_match:
+        return
+
+    search_start = bsp_section_match.end()
+    version_match = pattern.search(text, search_start)
+    if not version_match:
+        console.print("[dim]  Could not auto-bump BSP version (version line not found)[/dim]")
+        return
+
+    old_version = version_match.group(2)
+    parts = old_version.split(".")
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+    except ValueError:
+        console.print(f"[dim]  Could not auto-bump BSP version (unparseable: {old_version})[/dim]")
+        return
+
+    new_version = ".".join(parts)
+
+    # Replace only this specific match
+    new_text = (
+        text[:version_match.start()]
+        + f'{version_match.group(1)}"{new_version}"'
+        + text[version_match.end():]
+    )
+
+    config_path.write_text(new_text, encoding="utf-8")
+    console.print(f"[green]v BSP version bumped: {old_version} -> {new_version}[/green]")
+
+
 def version_callback(value: bool):
     """Show version and exit."""
     if value:
@@ -1186,7 +1241,7 @@ def validate_bsp(
                     )
                     if not guardrail_outcome.passed:
                         console.print(
-                            "[red]✗ Refusing BSP update: chairman output failed guardrails validation.[/red]"
+                            "[red]x Refusing BSP update: chairman output failed guardrails validation.[/red]"
                         )
                         if guardrail_outcome.error:
                             console.print(f"[yellow]  Reason: {guardrail_outcome.error}[/yellow]")
@@ -1204,7 +1259,11 @@ def validate_bsp(
                         console.print(f"[dim]  Backed up current BSP to {backup_path.name}[/dim]")
                     
                     bsp_file_path.write_text(final_bsp_text, encoding="utf-8")
-                    console.print(f"[green]✓ Updated {config.bsp.prompt_file} with improved BSP[/green]")
+                    console.print(f"[green]v Updated {config.bsp.prompt_file} with improved BSP[/green]")
+
+                    # --- Auto-bump BSP version in promptlab.yaml ---
+                    _bump_bsp_version(cwd / "promptlab.yaml", console)
+
                     console.print("[yellow]  Run 'promptlab validate' again to check the new score.[/yellow]")
                 else:
                     console.print("[dim]BSP update declined - terminating without changes.[/dim]")

@@ -240,11 +240,10 @@ def load_config(path: Optional[Path] = None) -> PromptLabConfig:
     # Recursively expand ${VAR} in the entire config tree
     data = _deep_expand(data)
     
-    # Load BSP from file if specified
-    if "bsp" in data and "prompt_file" in data["bsp"]:
-        bsp_file = Path(data["bsp"]["prompt_file"])
-        if bsp_file.exists():
-            data["bsp"]["prompt"] = bsp_file.read_text(encoding="utf-8")
+    # NOTE: Do NOT eagerly read bsp.prompt_file into data['bsp']['prompt'] here.
+    # The BSP file must be read fresh from disk by load_bsp() every time,
+    # so that updates to bsp.txt (e.g. from chairman suggestions) are
+    # immediately visible on the next validation run.
     
     return PromptLabConfig(**data)
 
@@ -264,6 +263,10 @@ def get_project_root() -> Optional[Path]:
 def load_bsp(config: PromptLabConfig, project_root: Optional[Path] = None) -> Optional[str]:
     """Load the Behavior Specification Prompt from config or file.
     
+    Always re-reads from disk when prompt_file is configured, so that
+    BSP changes (e.g. from chairman suggestions) are picked up on the
+    next validation run without restarting.
+    
     Args:
         config: PromptLab configuration
         project_root: Project root directory
@@ -271,9 +274,8 @@ def load_bsp(config: PromptLabConfig, project_root: Optional[Path] = None) -> Op
     Returns:
         BSP string or None if not configured
     """
-    if config.bsp.prompt:
-        return config.bsp.prompt
-    
+    # Always prefer reading from file when prompt_file is configured.
+    # This ensures changes to bsp.txt are picked up on every run.
     if config.bsp.prompt_file:
         bsp_path = Path(config.bsp.prompt_file)
         if not bsp_path.is_absolute() and project_root:
@@ -281,5 +283,9 @@ def load_bsp(config: PromptLabConfig, project_root: Optional[Path] = None) -> Op
         
         if bsp_path.exists():
             return bsp_path.read_text(encoding="utf-8")
+    
+    # Fall back to inline prompt if no file is configured
+    if config.bsp.prompt:
+        return config.bsp.prompt
     
     return None

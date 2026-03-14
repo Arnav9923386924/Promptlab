@@ -2,10 +2,16 @@
 
 These checks ensure the chairman returns a clean replacement BSP,
 not an append-only addendum of the previous BSP.
+
+The CHANGES: marker is treated as a *cleanable artefact* (stripped
+automatically), NOT a hard failure.  Only structural markers like
+IMPROVED_BSP_START / IMPROVED_BSP_END are treated as hard failures,
+since their presence means the extraction step itself failed.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -34,6 +40,95 @@ except Exception as _exc:  # pragma: no cover - environment-dependent
 
 def _normalize_text(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+# ---------------------------------------------------------------------------
+# CHANGES: block stripping
+# ---------------------------------------------------------------------------
+
+def strip_changes_block(text: str) -> str:
+    """Remove a leading CHANGES: block (and its bullet items) from BSP text.
+
+    Models frequently leak the CHANGES: list into the BSP body.  This
+    function strips it so the remaining text is a clean BSP.
+
+    Handles patterns like:
+        CHANGES:
+        - change 1
+        - change 2
+
+        [actual BSP starts here]
+
+    Also handles inline ``CHANGES: ...`` on a single line.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    cleaned_lines: list[str] = []
+    in_changes_block = False
+    changes_block_ended = False
+
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+
+        if not changes_block_ended:
+            # Detect start of a CHANGES: block
+            if upper.startswith("CHANGES:") or upper.startswith("SUGGESTED_CHANGES:"):
+                in_changes_block = True
+                # If there's BSP content on the same line after "CHANGES: ...",
+                # that's just the header — skip it.
+                continue
+
+            if in_changes_block:
+                # Inside a changes block: skip bullet items and numbered items
+                if stripped.startswith("- ") or stripped.startswith("* ") or re.match(r"^\d+[\.\)]\s", stripped):
+                    continue
+                # Empty line might separate changes from BSP
+                if not stripped:
+                    continue
+                # Non-bullet, non-empty line → changes block is over
+                in_changes_block = False
+                changes_block_ended = True
+
+        cleaned_lines.append(line)
+
+    result = "\n".join(cleaned_lines).strip()
+    return result if result else text.strip()
+
+
+def strip_evaluation_context(text: str) -> str:
+    """Remove leaked evaluation context from the end of a BSP candidate.
+
+    Models occasionally regurgitate the evaluation context (results, feedback,
+    sample outputs) provided in the prompt inside the improved BSP block.
+    This function truncates the text at the first sign of these sections.
+    """
+    if not text:
+        return text
+
+    # Common headers that indicate the start of leaked context
+    context_headers = [
+        "## EVALUATION RESULTS",
+        "EVALUATION RESULTS:",
+        "## JUDGE FEEDBACK",
+        "JUDGE FEEDBACK:",
+        "## WEAK AREAS IDENTIFIED",
+        "WEAK AREAS IDENTIFIED:",
+        "## SAMPLE OUTPUTS",
+        "SAMPLE OUTPUTS:"
+    ]
+
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        upper_line = line.strip().upper()
+        for header in context_headers:
+            if upper_line.startswith(header):
+                # Truncate at this line
+                return "\n".join(lines[:i]).strip()
+
+    return text.strip()
 
 
 def is_append_only_update(current_bsp: str, improved_bsp: str) -> bool:
@@ -78,14 +173,18 @@ if _GUARDRAILS_AVAILABLE:
 
     @register_validator(name="chairman_no_marker_leak", data_type="string")
     class ChairmanNoMarkerLeakValidator(Validator):
-        """Ensure output doesn't keep internal prompt markers."""
+        """Ensure output doesn't keep internal prompt markers.
+
+        Only IMPROVED_BSP_START / IMPROVED_BSP_END are hard failures.
+        CHANGES: is handled by the cleaning step, not by rejection.
+        """
 
         def _validate(self, value, metadata):
             text_upper = (value or "").upper()
+            # Only structural extraction markers are hard failures.
             leaked_tokens = [
                 "IMPROVED_BSP_START",
                 "IMPROVED_BSP_END",
-                "CHANGES:",
             ]
             for token in leaked_tokens:
                 if token in text_upper:
@@ -122,13 +221,19 @@ class ChairmanGuardrailOutcome:
 
 
 def _deterministic_checks(current_bsp: str, candidate: str) -> Optional[str]:
-    """Return first deterministic failure reason, or None when valid."""
+    """Return first deterministic failure reason, or None when valid.
+
+    Note: CHANGES: is NOT a hard failure — it's cleaned automatically
+    before this check runs.  Only IMPROVED_BSP_START / IMPROVED_BSP_END
+    are structural marker leaks that indicate extraction failure.
+    """
     if len(candidate) < 20:
         return "Improved BSP is too short to be a complete replacement."
 
-    leaked_tokens = ["IMPROVED_BSP_START", "IMPROVED_BSP_END", "CHANGES:"]
+    # Only structural markers are hard failures
+    hard_fail_tokens = ["IMPROVED_BSP_START", "IMPROVED_BSP_END"]
     text_upper = candidate.upper()
-    for token in leaked_tokens:
+    for token in hard_fail_tokens:
         if token in text_upper:
             return f"Improved BSP leaked control marker: {token}"
 
@@ -152,11 +257,20 @@ else:
 
 
 def validate_chairman_bsp_candidate(current_bsp: str, candidate_bsp: str) -> ChairmanGuardrailOutcome:
-    """Validate chairman BSP candidate with Guardrails AI + deterministic checks."""
+    """Validate chairman BSP candidate with Guardrails AI + deterministic checks.
+
+    Performs automatic cleaning (strip CHANGES: blocks) before validation,
+    so that common model formatting artefacts don't cause hard failures.
+    """
     candidate = (candidate_bsp or "").strip()
     if not candidate:
         return ChairmanGuardrailOutcome(passed=False, cleaned_bsp="", error="Improved BSP candidate is empty.")
 
+    # ---- Step 1: Clean known artefacts ----
+    candidate = strip_evaluation_context(candidate)
+    candidate = strip_changes_block(candidate)
+
+    # ---- Step 2: Deterministic checks on cleaned candidate ----
     deterministic_error = _deterministic_checks(current_bsp or "", candidate)
     if deterministic_error:
         return ChairmanGuardrailOutcome(passed=False, cleaned_bsp=candidate, error=deterministic_error)

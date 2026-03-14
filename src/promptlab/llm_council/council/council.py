@@ -3,6 +3,7 @@
 from typing import Optional, Literal
 from pydantic import BaseModel
 import asyncio
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -1829,12 +1830,18 @@ Rules for your improved BSP:
 - The improved BSP must be complete and self-contained (not a diff/patch)
 - Output ONE clean replacement BSP only (do not prepend the old BSP and do not append addenda)
 
+## CRITICAL OUTPUT FORMAT RULES:
+- Your suggested changes go BEFORE the markers, NOT inside them
+- The BSP body between IMPROVED_BSP_START and IMPROVED_BSP_END must contain
+  ONLY the replacement BSP text — no headers, no change descriptions, no markers
+- Do NOT include the word "CHANGES" anywhere inside the BSP body
+
 Respond in EXACTLY this format:
 
-CHANGES:
-- [Change 1: brief description of what changed and why]
-- [Change 2: brief description of what changed and why]
-- [Change 3: brief description of what changed and why]
+SUGGESTED_CHANGES:
+1. [Change 1: brief description of what changed and why]
+2. [Change 2: brief description of what changed and why]
+3. [Change 3: brief description of what changed and why]
 
 IMPROVED_BSP_START
 [Your complete improved BSP here — this will be written directly to bsp.txt]
@@ -1907,19 +1914,23 @@ IMPROVED_BSP_END
             
             text = result.text
             
-            # Parse changes list
+            # Parse changes list (supports both CHANGES: and SUGGESTED_CHANGES:)
             changes: list[str] = []
             in_changes = False
             for line in text.split("\n"):
                 stripped = line.strip()
-                if stripped.upper().startswith("CHANGES:"):
+                upper_stripped = stripped.upper()
+                if upper_stripped.startswith("CHANGES:") or upper_stripped.startswith("SUGGESTED_CHANGES:"):
                     in_changes = True
                     continue
-                if stripped.upper().startswith("IMPROVED_BSP_START"):
+                if upper_stripped.startswith("IMPROVED_BSP_START"):
                     in_changes = False
                     continue
-                if in_changes and stripped.startswith("- "):
+                if in_changes and (stripped.startswith("- ") or stripped.startswith("* ")):
                     changes.append(stripped[2:].strip())
+                elif in_changes and re.match(r"^\d+[\.)\:]\s", stripped):
+                    # Numbered item: "1. ...", "1) ...", "1: ..."
+                    changes.append(re.sub(r"^\d+[\.)\:]\s*", "", stripped).strip())
             
             # Parse improved BSP (prefer last delimited block in case model emits multiple drafts)
             improved_candidates = self._extract_improved_bsp_candidates(text)
@@ -1938,10 +1949,11 @@ IMPROVED_BSP_END
                 console.print("[yellow]  ⚠ Chairman returned append-style BSP; retrying with stricter formatting...[/yellow]")
                 retry_prompt = (
                     prompt
-                    + "\n\nIMPORTANT: Your previous response appended to the old BSP. "
+                    + "\n\nIMPORTANT: Your previous response was not formatted correctly. "
                     + "Return ONLY a full replacement BSP between IMPROVED_BSP_START and IMPROVED_BSP_END. "
                     + "Do NOT include the old BSP first. Do NOT add notes outside the markers. "
-                    + "Do NOT include CHANGES inside the improved BSP body."
+                    + "Do NOT include CHANGES, SUGGESTED_CHANGES, or any list descriptions inside the BSP body. "
+                    + "The content between IMPROVED_BSP_START and IMPROVED_BSP_END must be PURE BSP text only."
                 )
 
                 retry_result = await self.llm_runner.complete(
@@ -2033,7 +2045,13 @@ IMPROVED_BSP_END
         }:
             lines = lines[1:]
 
-        return "\n".join(lines).strip()
+        cleaned = "\n".join(lines).strip()
+
+        # Strip any CHANGES: / SUGGESTED_CHANGES: block that leaked into the BSP body.
+        from promptlab.utils.chairman_guardrails import strip_changes_block
+        cleaned = strip_changes_block(cleaned)
+
+        return cleaned
 
 # ============================================================================
 # Batch Evaluation Data Classes
