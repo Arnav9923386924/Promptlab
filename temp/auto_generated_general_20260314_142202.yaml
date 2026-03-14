@@ -1,0 +1,176 @@
+metadata:
+  name: 'Auto-Generated Tests: General'
+  description: 'Automatically generated from BSP analysis. Domain: general. Role:
+    helpful'
+  generated_at: '2026-03-14T14:22:02.493616'
+  source: promptlab-auto-generator
+  test_count: 15
+  keywords:
+  - always
+  - keep
+defaults:
+  temperature: 0
+cases:
+- id: general-cloze-2
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    General Best Practices Describes the purpose of and topics covered by the General
+    ____ Practices for Immunization.'
+  assertions:
+  - type: contains
+    value: Best
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - term
+- id: general-qa-2
+  prompt: What is These libraries?
+  assertions:
+  - type: contains
+    value: set of components which are nicely integrated with
+    case_sensitive: false
+  tags:
+  - general
+  - definition
+- id: general-qa-6
+  prompt: What is a grammar mistake?
+  assertions:
+  - type: contains
+    value: A grammar mistake is any incorrect usage of a word
+    case_sensitive: false
+  tags:
+  - general
+- id: general-qa-1
+  prompt: What is Since business logic and UI?
+  assertions:
+  - type: contains
+    value: completely decoupled, you can customize UI without
+    case_sensitive: false
+  tags:
+  - general
+  - definition
+- id: general-qa-9
+  prompt: What is Grammar?
+  assertions:
+  - type: min_length
+    value: '50'
+  tags:
+  - general
+  - definition
+- id: general-cloze-5
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    Timing and Spacing of Immunobiologics Review guidelines for the timing and ____
+    of immunobiologics.'
+  assertions:
+  - type: contains
+    value: spacing
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - word
+- id: general-qa-5
+  prompt: What is Ice floats on water because it?
+  assertions:
+  - type: contains
+    value: less dense than liquid water
+    case_sensitive: false
+  tags:
+  - general
+  - definition
+- id: general-qa-4
+  prompt: What is Living things?
+  assertions:
+  - type: contains
+    value: composed of one or more cells, which are the basic
+    case_sensitive: false
+  tags:
+  - general
+  - definition
+- id: general-cloze-6
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    Covers ____ principles and standards of valid contraindications and precautions,
+    and conditions incorrectly perceived as contraindications.'
+  assertions:
+  - type: contains
+    value: general
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - word
+- id: general-cloze-4
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    Discusses vaccine scheduling, supply and lapsed schedule, spacing of doses, simultaneous
+    and nonsimultaneous administration, licensed ____ vaccines, interchangeability
+    of formulations, extra doses, and conjugate vaccines.'
+  assertions:
+  - type: contains
+    value: combination
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - word
+- id: general-cloze-1
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    General Best Practices for Immunization This page ____ information for health
+    care and immunization providers about concerns that commonly arise when vaccinating
+    people of various ages.'
+  assertions:
+  - type: contains
+    value: provides
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - word
+- id: general-qa-8
+  prompt: What is Language?
+  assertions:
+  - type: min_length
+    value: '50'
+  tags:
+  - general
+  - definition
+- id: general-qa-3
+  prompt: What is The Data Provider?
+  assertions:
+  - type: contains
+    value: bridge between your frontend and your backend data
+    case_sensitive: false
+  tags:
+  - general
+  - definition
+- id: general-qa-7
+  prompt: What is The goal?
+  assertions:
+  - type: min_length
+    value: '50'
+  tags:
+  - general
+  - definition
+- id: general-cloze-3
+  prompt: 'Fill in the blank with the correct word or term:
+
+
+    Introduction to Immunization Best Practice Access ACIP''s ____ best practice guidelines
+    for immunization.'
+  assertions:
+  - type: contains
+    value: general
+    case_sensitive: false
+  tags:
+  - general
+  - cloze
+  - word

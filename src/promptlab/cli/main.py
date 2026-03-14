@@ -857,11 +857,13 @@ def validate_bsp(
             if judges:
                 config.council.members = judges
                 config.council.required_judges = selected_required_judges
-                config.council.use_fixed_judges = require_all_selected
-                mode_text = "strict" if require_all_selected else "flexible"
+                # Always keep judge execution limited to user-selected models.
+                # The strict/flexible choice only controls the required success count.
+                config.council.use_fixed_judges = True
+                mode_text = "all-selected-required" if require_all_selected else "minimum-selected-required"
                 console.print(
                     f"[dim]Updated: required_judges={selected_required_judges}, "
-                    f"use_fixed_judges={str(require_all_selected)} ({mode_text} mode)[/dim]"
+                    f"use_fixed_judges=True (selected-only, {mode_text})[/dim]"
                 )
             if chairman:
                 config.council.chairman = chairman
@@ -1172,16 +1174,36 @@ def validate_bsp(
                 )
                 
                 if update_bsp:
+                    from promptlab.utils.chairman_guardrails import validate_chairman_bsp_candidate
+
+                    current_bsp_text = ""
+                    if bsp_file_path.exists():
+                        current_bsp_text = bsp_file_path.read_text(encoding="utf-8")
+
+                    guardrail_outcome = validate_chairman_bsp_candidate(
+                        current_bsp=current_bsp_text,
+                        candidate_bsp=bsp_suggestion.improved_bsp,
+                    )
+                    if not guardrail_outcome.passed:
+                        console.print(
+                            "[red]✗ Refusing BSP update: chairman output failed guardrails validation.[/red]"
+                        )
+                        if guardrail_outcome.error:
+                            console.print(f"[yellow]  Reason: {guardrail_outcome.error}[/yellow]")
+                        raise typer.Exit(1)
+
+                    final_bsp_text = guardrail_outcome.cleaned_bsp
+
                     # Backup current BSP
                     backup_path = bsp_file_path.with_suffix(".bsp.bak")
                     if bsp_file_path.exists():
                         backup_path.write_text(
-                            bsp_file_path.read_text(encoding="utf-8"),
+                            current_bsp_text,
                             encoding="utf-8",
                         )
                         console.print(f"[dim]  Backed up current BSP to {backup_path.name}[/dim]")
                     
-                    bsp_file_path.write_text(bsp_suggestion.improved_bsp, encoding="utf-8")
+                    bsp_file_path.write_text(final_bsp_text, encoding="utf-8")
                     console.print(f"[green]✓ Updated {config.bsp.prompt_file} with improved BSP[/green]")
                     console.print("[yellow]  Run 'promptlab validate' again to check the new score.[/yellow]")
                 else:

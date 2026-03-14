@@ -138,34 +138,77 @@ class LLMRunner:
     ) -> CompletionResult:
         """Complete using Ollama."""
         endpoint = self.providers.get("ollama", {}).get("endpoint", "http://localhost:11434")
-        
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
+
+        def _build_messages(user_prompt: str) -> list[dict]:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": user_prompt})
+            return messages
+
+        # Adaptive retries: if local server fails with 500 or times out,
+        # progressively compact prompt and reduce output budget.
+        max_retries = 3
+        prompt_compact_steps = [None, 12000, 8000, 5000]
         client = await self._get_client()
-        response = await client.post(
-            f"{endpoint}/api/chat",
-            json={
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                },
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        return CompletionResult(
-            text=data.get("message", {}).get("content", ""),
-            tokens_in=data.get("prompt_eval_count", 0),
-            tokens_out=data.get("eval_count", 0),
-            cost_usd=0.0,  # Ollama is free
-        )
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max_retries + 1):
+            compact_limit = prompt_compact_steps[min(attempt, len(prompt_compact_steps) - 1)]
+            prompt_for_call = prompt
+            if compact_limit and len(prompt_for_call) > compact_limit:
+                prompt_for_call = (
+                    "[Prompt compacted for local model stability. Keep rubric strict.]\n\n"
+                    + prompt_for_call[: compact_limit - 80]
+                )
+
+            # Slightly reduce max tokens on retries to lower local generation load.
+            num_predict = max(256, int(max_tokens * (0.85 ** attempt)))
+
+            try:
+                response = await client.post(
+                    f"{endpoint}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": _build_messages(prompt_for_call),
+                        "stream": False,
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": num_predict,
+                        },
+                    },
+                    timeout=120.0,
+                )
+
+                # Retry local transient failures (500/502/503/504).
+                if response.status_code in (500, 502, 503, 504) and attempt < max_retries:
+                    await asyncio.sleep(1.2 * (attempt + 1))
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+
+                return CompletionResult(
+                    text=data.get("message", {}).get("content", ""),
+                    tokens_in=data.get("prompt_eval_count", 0),
+                    tokens_out=data.get("eval_count", 0),
+                    cost_usd=0.0,  # Ollama is free
+                )
+
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_exc = e
+                should_retry = True
+                if isinstance(e, httpx.HTTPStatusError):
+                    status = e.response.status_code if e.response is not None else None
+                    # Avoid retrying clear client/model errors unless transient server error.
+                    should_retry = status in (408, 429, 500, 502, 503, 504)
+                if attempt >= max_retries or not should_retry:
+                    raise
+                await asyncio.sleep(1.2 * (attempt + 1))
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"Ollama request failed for model {model}")
     
     async def _complete_openai_compatible(
         self,

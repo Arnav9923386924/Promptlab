@@ -8,6 +8,10 @@ from datetime import datetime
 
 from promptlab.llm_council.llm_runner.runner import LLMRunner, CompletionResult
 from promptlab.utils.model_pool import ModelPool
+from promptlab.utils.chairman_guardrails import (
+    is_append_only_update,
+    validate_chairman_bsp_candidate,
+)
 
 
 class CouncilAttemptsLogger:
@@ -734,15 +738,6 @@ SUMMARY: [1-2 sentence consensus summary]
         from rich.console import Console
         console = Console()
         
-        # Format all outputs into a single evaluation text
-        outputs_text = self._format_batch_outputs(outputs)
-        
-        prompt = self.BATCH_JUDGE_PROMPT.format(
-            bsp=bsp[:4000] if bsp else "No BSP specified",
-            outputs=outputs_text,
-            total_tests=len(outputs),
-        )
-        
         # Get judge models from pool (preferred + discovered free models)
         judge_models = await self._get_judge_model_list()
         required_judges = self.config.get("required_judges", 2)
@@ -754,6 +749,25 @@ SUMMARY: [1-2 sentence consensus summary]
         if use_fixed_judges:
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
+
+        # Local Ollama models can fail with oversized judge prompts.
+        # When strict mode uses only Ollama judges, compact context aggressively.
+        all_strict_ollama = bool(judge_models) and all(m.startswith("ollama/") for m in judge_models)
+        max_outputs = 25
+        bsp_limit = 4000
+        if use_fixed_judges and all_strict_ollama:
+            max_outputs = 12
+            bsp_limit = 2200
+            console.print("[dim]  🧩 Local Ollama compact mode: reduced judge context for stability[/dim]")
+
+        # Format all outputs into a single evaluation text
+        outputs_text = self._format_batch_outputs(outputs, max_outputs=max_outputs)
+
+        prompt = self.BATCH_JUDGE_PROMPT.format(
+            bsp=bsp[:bsp_limit] if bsp else "No BSP specified",
+            outputs=outputs_text,
+            total_tests=len(outputs),
+        )
         
         if self.verbose_attempts:
             console.print(f"[dim]  📋 Configured: {len(self.members)}, Available: {len(judge_models)}[/dim]")
@@ -1813,6 +1827,7 @@ Rules for your improved BSP:
 - Strengthen instruction boundaries where instruction following is low
 - Be specific — don't just say "be better", show exactly what to change
 - The improved BSP must be complete and self-contained (not a diff/patch)
+- Output ONE clean replacement BSP only (do not prepend the old BSP and do not append addenda)
 
 Respond in EXACTLY this format:
 
@@ -1906,16 +1921,57 @@ IMPROVED_BSP_END
                 if in_changes and stripped.startswith("- "):
                     changes.append(stripped[2:].strip())
             
-            # Parse improved BSP
-            improved_bsp = None
-            if "IMPROVED_BSP_START" in text and "IMPROVED_BSP_END" in text:
-                start = text.index("IMPROVED_BSP_START") + len("IMPROVED_BSP_START")
-                end = text.index("IMPROVED_BSP_END")
-                improved_bsp = text[start:end].strip()
+            # Parse improved BSP (prefer last delimited block in case model emits multiple drafts)
+            improved_candidates = self._extract_improved_bsp_candidates(text)
+            improved_bsp = improved_candidates[-1] if improved_candidates else None
+
+            # Guard against accidental append-style output: "old BSP + addendum".
+            # If detected, retry once with an explicit correction.
+            initial_validation = None
+            if improved_bsp:
+                initial_validation = validate_chairman_bsp_candidate(current_bsp, improved_bsp)
+
+            if improved_bsp and (
+                is_append_only_update(current_bsp, improved_bsp)
+                or (initial_validation is not None and not initial_validation.passed)
+            ):
+                console.print("[yellow]  ⚠ Chairman returned append-style BSP; retrying with stricter formatting...[/yellow]")
+                retry_prompt = (
+                    prompt
+                    + "\n\nIMPORTANT: Your previous response appended to the old BSP. "
+                    + "Return ONLY a full replacement BSP between IMPROVED_BSP_START and IMPROVED_BSP_END. "
+                    + "Do NOT include the old BSP first. Do NOT add notes outside the markers. "
+                    + "Do NOT include CHANGES inside the improved BSP body."
+                )
+
+                retry_result = await self.llm_runner.complete(
+                    retry_prompt,
+                    model=self.chairman,
+                    temperature=0.2,
+                    max_tokens=4000,
+                )
+                retry_candidates = self._extract_improved_bsp_candidates(retry_result.text)
+                non_append_candidates = [
+                    c for c in retry_candidates if not is_append_only_update(current_bsp, c)
+                ]
+                improved_bsp = (
+                    non_append_candidates[-1]
+                    if non_append_candidates
+                    else (retry_candidates[-1] if retry_candidates else None)
+                )
             
             if not improved_bsp:
                 console.print("[yellow]  ⚠ Chairman did not produce a valid improved BSP[/yellow]")
                 return None
+
+            final_validation = validate_chairman_bsp_candidate(current_bsp, improved_bsp)
+            if not final_validation.passed:
+                console.print(
+                    f"[red]  ✗ Chairman improved BSP failed guardrails: {final_validation.error or 'validation failed'}[/red]"
+                )
+                return None
+
+            improved_bsp = final_validation.cleaned_bsp
             
             if not changes:
                 changes = ["General improvements based on evaluation feedback"]
@@ -1932,6 +1988,52 @@ IMPROVED_BSP_END
             console.print(f"[red]  ✗ BSP improvement failed: {str(e)[:80]}[/red]")
             return None
 
+    def _extract_improved_bsp_candidates(self, text: str) -> list[str]:
+        """Extract all BSP candidates from IMPROVED_BSP markers, sanitized.
+
+        Models sometimes emit multiple marked blocks; we keep all candidates so
+        caller can choose the best one.
+        """
+        import re
+
+        pattern = re.compile(
+            r"IMPROVED_BSP_START\s*(.*?)\s*IMPROVED_BSP_END",
+            re.IGNORECASE | re.DOTALL,
+        )
+        raw_candidates = [m.group(1).strip() for m in pattern.finditer(text)]
+
+        candidates: list[str] = []
+        for candidate in raw_candidates:
+            cleaned = self._sanitize_bsp_candidate(candidate)
+            if cleaned:
+                candidates.append(cleaned)
+        return candidates
+
+    def _sanitize_bsp_candidate(self, text: str) -> str:
+        """Remove common wrappers from a BSP candidate block."""
+        if not text:
+            return ""
+
+        cleaned = text.strip()
+
+        # Unwrap fenced markdown/code blocks if model wrapped the BSP.
+        if cleaned.startswith("```") and cleaned.endswith("```"):
+            parts = cleaned.split("\n")
+            if len(parts) >= 3:
+                cleaned = "\n".join(parts[1:-1]).strip()
+
+        # Drop one-line labels such as "Improved BSP:" that some models add.
+        lines = cleaned.splitlines()
+        while lines and lines[0].strip().lower().rstrip(":") in {
+            "improved bsp",
+            "updated bsp",
+            "final bsp",
+            "revised bsp",
+            "bsp",
+        }:
+            lines = lines[1:]
+
+        return "\n".join(lines).strip()
 
 # ============================================================================
 # Batch Evaluation Data Classes

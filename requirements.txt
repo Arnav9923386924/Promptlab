@@ -22,3 +22,6 @@ playwright-stealth>=2.0.0
 
 # Search
 duckduckgo-search>=8.0.0
+
+# Chairman output guardrails
+guardrails-ai>=0.9.1
