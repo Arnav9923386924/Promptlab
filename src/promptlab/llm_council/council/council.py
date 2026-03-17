@@ -302,6 +302,11 @@ SUMMARY: [1-2 sentence consensus summary]
         if use_fixed_judges:
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
+        else:
+            # In flexible mode, always attempt all user-selected/configured judges first.
+            configured = list(self.members)
+            fallback = [m for m in judge_models if m not in configured]
+            judge_models = configured + fallback
         
         if self.verbose_attempts:
             console.print(f"[dim]  📋 Configured members: {len(self.members)}, Available candidates: {len(judge_models)}[/dim]")
@@ -317,8 +322,9 @@ SUMMARY: [1-2 sentence consensus summary]
             is_configured = model in self.members
             if is_configured:
                 configured_tried += 1
-            
-            if len(scores) >= required_judges:
+
+            # Always attempt configured judges; only short-circuit once we move to fallback.
+            if (not is_configured) and len(scores) >= required_judges:
                 break
             
             # Log attempt start to file
@@ -603,7 +609,7 @@ SUMMARY: [1-2 sentence consensus summary]
         
         API call optimization:
         - Batch: 1 call per judge per chunk (not 1 per test)
-        - Early agreement: if first 2 judges agree (σ < 0.06), skip remaining
+        - Early agreement: may skip fallback judges only after configured judges are attempted
         - Result: typically 2-3 API calls per chunk
         
         Args:
@@ -720,7 +726,7 @@ SUMMARY: [1-2 sentence consensus summary]
     ) -> "BatchEvaluationResult":
         """Evaluate a single batch of outputs (≤ CHUNK_SIZE).
         - Batch: 1 call per judge (not 1 per test)
-        - Early agreement: if first 2 judges agree (σ < 0.06), skip remaining
+        - Early agreement: may skip fallback judges only after configured judges are attempted
         - Result: typically 2-3 API calls for full evaluation
         
         Args:
@@ -754,6 +760,11 @@ SUMMARY: [1-2 sentence consensus summary]
         if use_fixed_judges:
             judge_models = list(self.members)  # Override with ONLY configured judges
             console.print(f"[dim]  🔒 Strict judge mode: using ONLY {len(judge_models)} configured judges[/dim]")
+        else:
+            # In flexible mode, always attempt all user-selected/configured judges first.
+            configured = list(self.members)
+            fallback = [m for m in judge_models if m not in configured]
+            judge_models = configured + fallback
         
         if self.verbose_attempts:
             console.print(f"[dim]  📋 Configured: {len(self.members)}, Available: {len(judge_models)}[/dim]")
@@ -767,13 +778,14 @@ SUMMARY: [1-2 sentence consensus summary]
         if self.attempts_logger:
             self.attempts_logger.log_chunk_start(len(outputs))
         
-        for model in judge_models:
+        for idx, model in enumerate(judge_models):
             # Track which models are from config vs fallback
             is_configured = model in self.members
             if is_configured:
                 configured_tried += 1
-            
-            if len(judge_results) >= required_judges:
+
+            # Always attempt configured judges; only short-circuit once we move to fallback.
+            if (not is_configured) and len(judge_results) >= required_judges:
                 break
             
             # Log attempt start to file
@@ -825,8 +837,12 @@ SUMMARY: [1-2 sentence consensus summary]
                         console.print(f"[red]  ✗ {model_short} failed: {error_msg[:60]}[/red]")
                 continue
             
-            # Early agreement check: ONLY after meeting required count
+            # Early agreement check: ONLY after meeting required count and after
+            # all configured judges have already been attempted.
             if len(judge_results) >= required_judges:
+                has_remaining_configured = any(m in self.members for m in judge_models[idx + 1:])
+                if has_remaining_configured:
+                    continue
                 scores_so_far = [s.overall_score for s in judge_results]
                 std = self._calculate_std(scores_so_far)
                 if std < 0.06:

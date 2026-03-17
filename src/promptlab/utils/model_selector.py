@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from typing import Optional
+from urllib.parse import urlsplit
 
 from rich.console import Console
 from rich.table import Table
@@ -119,29 +120,47 @@ async def _list_ollama_models(endpoint: str) -> list[dict]:
 
     models: list[dict] = []
     base = (endpoint or "http://localhost:11434").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base}/api/tags")
-            resp.raise_for_status()
-            for entry in resp.json().get("models", []):
-                model_name = entry.get("name") or entry.get("model") or ""
-                if not model_name:
-                    continue
-                models.append({
-                    "id": f"ollama/{model_name}",
-                    "name": model_name,
-                    "provider": "Ollama",
-                    "context": 0,
-                })
-    except Exception as e:
-        console.print(f"[yellow]  Warning: Ollama model fetch failed: {str(e)[:80]}[/yellow]")
+    parts = urlsplit(base)
+    candidates = [base]
+    if parts.hostname == "localhost":
+        candidates.append(base.replace("localhost", "127.0.0.1", 1))
+    elif parts.hostname == "127.0.0.1":
+        candidates.append(base.replace("127.0.0.1", "localhost", 1))
+
+    # Preserve order while removing duplicates.
+    candidates = list(dict.fromkeys(candidates))
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            # Ignore proxy env for local Ollama calls.
+            async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+                resp = await client.get(f"{candidate}/api/tags")
+                resp.raise_for_status()
+                for entry in resp.json().get("models", []):
+                    model_name = entry.get("name") or entry.get("model") or ""
+                    if not model_name:
+                        continue
+                    models.append({
+                        "id": f"ollama/{model_name}",
+                        "name": model_name,
+                        "provider": "Ollama",
+                        "context": 0,
+                    })
+                return models
+        except Exception as e:
+            last_error = e
+
+    tried = ", ".join(candidates)
+    reason = str(last_error)[:80] if last_error else "unknown error"
+    console.print(f"[yellow]  Warning: Ollama model fetch failed ({tried}): {reason}[/yellow]")
     return models
 
 
 def _list_static_provider_models(provider_name: str) -> list[dict]:
     """Return well-known models for providers that don't have a list API.
 
-    These are common models for OpenAI, Anthropic, xAI, Ollama.
+    These are common models for OpenAI, Anthropic, xAI, NVIDIA.
     The user can always type a custom model ID via the free-text option.
     """
     static = {
@@ -164,6 +183,14 @@ def _list_static_provider_models(provider_name: str) -> list[dict]:
             ("xai/grok-2", "Grok 2"),
             ("xai/grok-2-mini", "Grok 2 Mini"),
             ("xai/grok-3", "Grok 3"),
+        ],
+        "nvidia": [
+            ("nvidia/deepseek-ai/deepseek-v3.2", "deepseek-ai/deepseek-v3.2"),
+            ("nvidia/nemotron-content-safety-reasoning-4b", "nemotron-content-safety-reasoning-4b"),
+            ("nvidia/mistralai/devstral-2-123b-instruct-2512", "mistralai/devstral-2-123b-instruct-2512"),
+            ("nvidia/deepseek-ai/deepseek-v3.1-terminus", "deepseek-ai/deepseek-v3.1-terminus"),
+            ("nvidia/deepseek-ai/deepseek-v3.1", "deepseek-ai/deepseek-v3.1"),
+            ("nvidia/mistralai/magistral-small-2506", "mistralai/magistral-small-2506"),
         ],
     }
     provider_lower = provider_name.lower()
@@ -213,7 +240,7 @@ async def discover_models(config) -> list[dict]:
                 all_models.extend(r)
 
     # Static models for providers with API keys configured
-    for pname in ("openai", "anthropic", "xai"):
+    for pname in ("openai", "anthropic", "xai", "nvidia"):
         pcfg = providers.get(pname)
         if pcfg and pcfg.api_key and not pcfg.api_key.endswith("-xxx"):
             all_models.extend(_list_static_provider_models(pname))

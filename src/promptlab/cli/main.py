@@ -75,15 +75,16 @@ def _run_interactive_init(cwd: Path):
     console.print("  2. [bold]OpenRouter[/bold] — FREE tier, many models")
     console.print("  3. [bold]Ollama[/bold] — Local, FREE, no key needed")
     console.print("  4. [bold]OpenAI[/bold] — GPT-4o, paid")
-    console.print("  5. [bold]Other[/bold] (anthropic, xai)")
+    console.print("  5. [bold]NVIDIA[/bold] — NVIDIA NIM models")
+    console.print("  6. [bold]Other[/bold] (anthropic, xai)")
     console.print()
     
-    choice = typer.prompt("Choose provider (1-5)", default="1")
+    choice = typer.prompt("Choose provider (1-6)", default="1")
     
-    provider_map = {"1": "google", "2": "openrouter", "3": "ollama", "4": "openai", "5": "ollama"}
+    provider_map = {"1": "google", "2": "openrouter", "3": "ollama", "4": "openai", "5": "nvidia", "6": "ollama"}
     primary = provider_map.get(choice, "google")
     
-    if choice == "5":
+    if choice == "6":
         primary = typer.prompt("Enter provider name (anthropic, xai)", default="anthropic")
     
     # Get API key
@@ -95,6 +96,7 @@ def _run_interactive_init(cwd: Path):
             "openai": "https://platform.openai.com/api-keys",
             "anthropic": "https://console.anthropic.com/settings/keys",
             "xai": "https://console.x.ai/",
+            "nvidia": "https://build.nvidia.com/",
         }
         if primary in help_urls:
             console.print(f"\n[dim]Get your key at: {help_urls[primary]}[/dim]")
@@ -113,6 +115,7 @@ def _run_interactive_init(cwd: Path):
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "xai": "XAI_API_KEY",
+        "nvidia": "NVIDIA_API_KEY",
     }
     
     # Create .env with actual API key
@@ -282,6 +285,8 @@ PROVIDER_BLOCKS = {
       api_key: ${{ANTHROPIC_API_KEY}}""",
     "xai": """    xai:
       api_key: ${{XAI_API_KEY}}""",
+        "nvidia": """    nvidia:
+            api_key: ${{NVIDIA_API_KEY}}""",
 }
 
 # Default models per provider
@@ -292,6 +297,7 @@ DEFAULT_MODELS = {
     "openai": "openai/gpt-4o-mini",
     "anthropic": "anthropic/claude-3-haiku-20240307",
     "xai": "xai/grok-2",
+    "nvidia": "nvidia/deepseek-ai/deepseek-v3.2",
 }
 
 # Council configs per provider
@@ -319,6 +325,10 @@ COUNCIL_CONFIGS = {
     "xai": {
         "members": ["xai/grok-2"],
         "chairman": "xai/grok-2",
+    },
+    "nvidia": {
+        "members": ["nvidia/deepseek-ai/deepseek-v3.2", "nvidia/deepseek-ai/deepseek-v3.1"],
+        "chairman": "nvidia/deepseek-ai/deepseek-v3.2",
     },
 }
 
@@ -443,7 +453,7 @@ def main(
 @app.command()
 def init(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
-    provider: str = typer.Option(None, "--provider", "-p", help="Provider: ollama, openrouter, google, openai, anthropic, xai"),
+    provider: str = typer.Option(None, "--provider", "-p", help="Provider: ollama, openrouter, google, openai, anthropic, xai, nvidia"),
     api_key: str = typer.Option(None, "--api-key", "-k", help="API key for the chosen provider"),
     non_interactive: bool = typer.Option(False, "--yes", "-y", help="Non-interactive mode with defaults"),
 ):
@@ -485,7 +495,7 @@ def init(
     
     if provider:
         # Quick mode — single provider from CLI args
-        if provider in ("openrouter", "google", "openai", "anthropic", "xai"):
+        if provider in ("openrouter", "google", "openai", "anthropic", "xai", "nvidia"):
             if not api_key:
                 console.print(f"[red]✗ {provider} requires --api-key[/red]")
                 raise typer.Exit(1)
@@ -494,7 +504,7 @@ def init(
             providers_selected["ollama"] = None
         else:
             console.print(f"[red]✗ Unknown provider: {provider}[/red]")
-            console.print("[dim]Supported: ollama, openrouter, google, openai, anthropic, xai[/dim]")
+            console.print("[dim]Supported: ollama, openrouter, google, openai, anthropic, xai, nvidia[/dim]")
             raise typer.Exit(1)
     elif non_interactive:
         # Default to ollama
@@ -512,6 +522,7 @@ def init(
             ("openai", "OpenAI — GPT-4o, paid", ""),
             ("anthropic", "Anthropic — Claude, paid", ""),
             ("xai", "xAI — Grok, paid", ""),
+            ("nvidia", "NVIDIA — NIM hosted models", "Get key: https://build.nvidia.com/"),
         ]
         
         for name, desc, help_url in provider_choices:
@@ -544,6 +555,7 @@ def init(
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "xai": "XAI_API_KEY",
+        "nvidia": "NVIDIA_API_KEY",
     }
     
     # Create .env file with actual API keys

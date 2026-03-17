@@ -27,6 +27,7 @@ class LLMRunner:
     - anthropic: Anthropic API (Claude)
     - google: Google AI API (Gemini)
     - xai: xAI API (Grok)
+    - nvidia: NVIDIA NIM API
     """
     
     # API endpoints for direct providers
@@ -35,6 +36,7 @@ class LLMRunner:
         "anthropic": "https://api.anthropic.com/v1/messages",
         "google": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "xai": "https://api.x.ai/v1/chat/completions",
+        "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     }
     
@@ -98,6 +100,10 @@ class LLMRunner:
             result = await self._complete_openai_compatible(
                 "xai", model_name, prompt, system_prompt, temperature, max_tokens
             )
+        elif provider == "nvidia":
+            result = await self._complete_openai_compatible(
+                "nvidia", model_name, prompt, system_prompt, temperature, max_tokens
+            )
         elif provider == "anthropic":
             result = await self._complete_anthropic(
                 model_name, prompt, system_prompt, temperature, max_tokens
@@ -107,7 +113,7 @@ class LLMRunner:
                 model_name, prompt, system_prompt, temperature, max_tokens
             )
         else:
-            raise ValueError(f"Unknown provider: {provider}. Supported: ollama, openrouter, openai, anthropic, google, xai")
+            raise ValueError(f"Unknown provider: {provider}. Supported: ollama, openrouter, openai, anthropic, google, xai, nvidia")
         
         result.latency_ms = int((time.time() - start_time) * 1000)
         result.model = model
