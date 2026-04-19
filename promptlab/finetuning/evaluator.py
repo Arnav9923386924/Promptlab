@@ -215,12 +215,13 @@ class RunEvaluator:
     ) -> JudgeFeedback:
         """Get evaluation feedback from a single judge model."""
         result = await self.llm_runner.complete_with_fallback(
+            prompt=prompt,
+            fallback_models=[],
+            model=model,
             system_prompt=_JUDGE_SYSTEM_PROMPT,
-            user_prompt=prompt,
-            preferred_model=model,
         )
 
-        return self._parse_judge_response(model, result.content)
+        return self._parse_judge_response(model, result.text)
 
     def _parse_judge_response(
         self, model: str, raw_response: str

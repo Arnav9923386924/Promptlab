@@ -56,6 +56,16 @@ Respond with ONLY a JSON object matching this schema:
 """
 
 
+_RETRY_SUFFIX = """
+
+IMPORTANT OUTPUT RULES:
+- Return ONLY a single valid JSON object.
+- Do not use markdown fences.
+- Ensure all braces are closed.
+- Keep rationale to <= 2 short sentences.
+"""
+
+
 class HyperparamProposer:
     """Proposes next hyperparameter configs using LLM reasoning."""
 
@@ -128,27 +138,105 @@ class HyperparamProposer:
 
         # Get LLM completion
         result = await self.llm_runner.complete_with_fallback(
+            prompt=prompt,
+            fallback_models=[],
+            model=model,
             system_prompt=_PROPOSAL_SYSTEM_PROMPT,
-            user_prompt=prompt,
-            preferred_model=model,
+            max_tokens=1600,
         )
 
-        # Parse and validate
-        return self._parse_proposal(result.content)
+        # Parse and validate; retry once if model output is truncated/malformed.
+        try:
+            return self._parse_proposal(result.text)
+        except ValueError as first_error:
+            logger.info("First FT proposal parse failed, retrying once: %s", first_error)
+            retry_prompt = prompt + _RETRY_SUFFIX
+            retry_result = await self.llm_runner.complete_with_fallback(
+                prompt=retry_prompt,
+                fallback_models=[],
+                model=model,
+                system_prompt=_PROPOSAL_SYSTEM_PROMPT,
+                max_tokens=2600,
+            )
+            return self._parse_proposal(retry_result.text)
 
-    def _parse_proposal(self, raw_response: str) -> CandidateConfig:
-        """Parse LLM response into a validated CandidateConfig."""
-        # Strip markdown fences if present
+    def _extract_json_object(self, raw_response: str) -> str:
+        """Extract a best-effort JSON object from model output.
+
+        Handles markdown fences, leading prose, and truncated closing braces.
+        """
         content = raw_response.strip()
+
         if content.startswith("```"):
             lines = content.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
-            content = "\n".join(lines)
+            content = "\n".join(lines).strip()
+
+        # Prefer extracting from the first "{" to the matching closing brace.
+        start = content.find("{")
+        if start == -1:
+            return content
+
+        chunk = content[start:]
+        brace_depth = 0
+        end_index = None
+        for i, ch in enumerate(chunk):
+            if ch == "{":
+                brace_depth += 1
+            elif ch == "}":
+                brace_depth -= 1
+                if brace_depth == 0:
+                    end_index = i
+                    break
+
+        # Fully balanced JSON object found.
+        if end_index is not None:
+            return chunk[: end_index + 1]
+
+        # Truncated output: close any missing braces.
+        if brace_depth > 0:
+            return chunk + ("}" * brace_depth)
+
+        return chunk
+
+    def _parse_json_loose(self, content: str) -> dict:
+        """Parse JSON with minor repair for common LLM formatting issues."""
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # Remove trailing commas before object/array close: ",}" -> "}" and ",]" -> "]"
+            repaired = content.replace(",}", "}").replace(",]", "]")
+            return json.loads(repaired)
+
+    def _parse_proposal(self, raw_response: str) -> CandidateConfig:
+        """Parse LLM response into a validated CandidateConfig."""
+        content = self._extract_json_object(raw_response)
 
         try:
-            data = json.loads(content)
+            data = self._parse_json_loose(content)
         except json.JSONDecodeError as e:
+            logger.debug("Raw response from LLM: %s", raw_response)
+            logger.debug("Processed content for parse: %s", content)
             raise ValueError(f"LLM returned invalid JSON for config proposal: {e}")
+
+        required_fields = [
+            "learning_rate",
+            "lora_rank",
+            "lora_alpha",
+            "num_epochs",
+            "batch_size",
+            "gradient_accumulation_steps",
+            "warmup_ratio",
+            "weight_decay",
+            "scheduler_type",
+            "max_seq_length",
+            "rationale",
+        ]
+        missing_fields = [f for f in required_fields if f not in data]
+        if missing_fields:
+            raise ValueError(
+                "LLM proposal missing required fields: " + ", ".join(missing_fields)
+            )
 
         # Clamp values to search space
         ss = self.search_space

@@ -246,17 +246,17 @@ PROVIDER_BLOCKS = {
     "ollama": """    ollama:
       endpoint: http://localhost:11434""",
     "openrouter": """    openrouter:
-      api_key: ${{OPENROUTER_API_KEY}}""",
+      api_key: ${OPENROUTER_API_KEY}""",
     "google": """    google:
-      api_key: ${{GOOGLE_API_KEY}}""",
+      api_key: ${GOOGLE_API_KEY}""",
     "openai": """    openai:
-      api_key: ${{OPENAI_API_KEY}}""",
+      api_key: ${OPENAI_API_KEY}""",
     "anthropic": """    anthropic:
-      api_key: ${{ANTHROPIC_API_KEY}}""",
+      api_key: ${ANTHROPIC_API_KEY}""",
     "xai": """    xai:
-      api_key: ${{XAI_API_KEY}}""",
+      api_key: ${XAI_API_KEY}""",
         "nvidia": """    nvidia:
-            api_key: ${{NVIDIA_API_KEY}}""",
+            api_key: ${NVIDIA_API_KEY}""",
 }
 
 # Default models per provider

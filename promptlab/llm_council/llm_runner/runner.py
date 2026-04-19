@@ -2,9 +2,13 @@
 
 import httpx
 import asyncio
+import logging
 from typing import Optional
 from pydantic import BaseModel
 import time
+
+
+logger = logging.getLogger(__name__)
 
 
 class CompletionResult(BaseModel):
@@ -435,6 +439,8 @@ class LLMRunner:
         # Fallback: estimate token count when provider doesn't return usage
         if not tokens_out and text:
             tokens_out = max(1, len(text) // 4)
+            
+        logger.debug("Gemini raw JSON response: %s", data)
         
         return CompletionResult(
             text=text,

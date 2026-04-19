@@ -39,6 +39,7 @@ PromptLab provides:
 - **Baseline tracking** to prevent regressions
 - **CI/CD integration** for GitHub Actions
 - **Batch evaluation** for efficient API usage
+- **Fine-tuning governance** for hyperparameter proposal + council decisions
 
 ---
 
@@ -62,7 +63,7 @@ pip install -e .
 
 1. **Initialize Project**
    ```bash
-   promptlab init
+  promptlab init --mode bsp
    ```
    Creates complete project structure:
    - `promptlab.yaml` â€” main configuration
@@ -70,6 +71,12 @@ pip install -e .
    - `.gitignore` â€” PromptLab patterns
    - `temp/example.yaml` â€” example test suite
    - `.promptlab/` â€” baseline storage
+
+    Other init modes:
+    ```bash
+    promptlab init --mode ft    # Fine-tuning governance only
+    promptlab init --mode both  # BSP + FT
+    ```
 
 2. **Choose Provider** (interactive or quick setup)
    ```bash
@@ -88,23 +95,32 @@ pip install -e .
 
 3. **Run Validation**
    ```bash
-   promptlab validate
+  promptlab bsp run
    ```
 
    Useful validation options:
    ```bash
    # Generate a specific number of tests before validating
-   promptlab validate --generate 100
+  promptlab bsp run --generate 100
 
    # Disable auto-generation and require existing tests
-   promptlab validate --no-generate
+  promptlab bsp run --no-generate
 
    # CI-friendly exit codes
-   promptlab validate --ci
+  promptlab bsp run --ci
 
    # Write validation result to JSON
-   promptlab validate --output result.json
+  promptlab bsp run --output result.json
    ```
+
+4. **(Optional) Fine-Tuning Governance**
+  ```bash
+  # Suggest the next hyperparameter configuration
+  promptlab ft run --propose
+
+  # Evaluate a completed training run (artifacts JSON)
+  promptlab ft run --artifacts run_artifacts.json --output governance_out.json
+  ```
 
 That's it! Your first validation runs automatically with intelligent model fallback.
 
@@ -118,30 +134,37 @@ PromptLab provides a comprehensive set of commands:
 
 | Command | Description |
 |---------|-------------|
-| `promptlab init` | **Initialize project** creates all config files, bsp.txt, .gitignore |
+| `promptlab init` | **Initialize project** (`--mode bsp|ft|both`) |
 | `promptlab ci-setup` | Generate GitHub Actions workflow for CI/CD |
 
 ### Validation & Testing
 
 | Command | Description |
 |---------|-------------|
-| `promptlab validate` | Run full BSP validation with council evaluation |
-| `promptlab lint-bsp` | Check BSP for quality issues (FREE, no API calls) |
-| `promptlab guardrail` | Run adversarial security tests against your BSP |
+| `promptlab bsp run` | Run full BSP validation with council evaluation |
+| `promptlab bsp lint` | Check BSP for quality issues (FREE, no API calls) |
+| `promptlab guard` | Run adversarial security tests against your BSP |
 
 ### Optimization & History
 
 | Command | Description |
 |---------|-------------|
-| `promptlab optimize-bsp` | Iteratively improve BSP using AI + linting feedback |
+| `promptlab bsp opt` | Iteratively improve BSP using AI + linting feedback |
 | `promptlab history` | View evaluation history and score trends (FREE) |
 
 ### Conversation & Data
 
 | Command | Description |
 |---------|-------------|
-| `promptlab evaluate-conversation` | Evaluate multi-turn conversation quality and drift |
-| `promptlab generate-training-data` | Generate fine-tuning datasets from BSP and outputs |
+| `promptlab chat` | Evaluate multi-turn conversation quality and drift |
+| `promptlab export` | Generate fine-tuning datasets from BSP and outputs |
+
+### Fine-Tuning Governance
+
+| Command | Description |
+|---------|-------------|
+| `promptlab ft run --propose` | Propose next hyperparameter configuration |
+| `promptlab ft run --artifacts <file>` | Evaluate a completed run and return governance decision |
 
 ### Examples
 
@@ -150,26 +173,35 @@ PromptLab provides a comprehensive set of commands:
 promptlab init -p google -k AIza...
 
 # Lint your BSP (no API calls, completely free)
-promptlab lint-bsp
+promptlab bsp lint
 
 # Run full validation
-promptlab validate
+promptlab bsp run
 
 # View score trends
 promptlab history
 
 # Run security tests
-promptlab guardrail
+promptlab guard
 
 # Optimize BSP with AI feedback
-promptlab optimize-bsp
+promptlab bsp opt
 
 # Evaluate multi-turn conversation quality
-promptlab evaluate-conversation
+promptlab chat
 
 # Generate fine-tuning data from outputs
-promptlab generate-training-data
+promptlab export
+
+# Propose next FT config
+promptlab ft run --propose
+
+# Evaluate FT run artifacts
+promptlab ft run --artifacts run_artifacts.json
 ```
+
+Legacy aliases still work: `validate`, `lint-bsp`, `optimize-bsp`, `scraper`,
+`evaluate-conversation`, `generate-training-data`, `guardrail`.
 
 ---
 
@@ -312,14 +344,14 @@ BSP validation uses `promptlab.yaml` configuration with these key sections:
 
 ## Test Generation Modes
 
-PromptLab supports three test generation modes, configured via `bsp.generation_mode` in `promptlab.yaml` or the `--mode` flag on the `scraper` command.
+PromptLab supports three test generation modes, configured via `bsp.generation_mode` in `promptlab.yaml` or the `--mode` flag on `promptlab bsp gen`.
 
 ### Mode: `web` (default)
 
 The original pipeline — scrape web pages, extract Q&A / cloze tests with regex heuristics.
 
 ```bash
-promptlab scraper --mode web --count 50
+promptlab bsp gen --mode web --count 50
 ```
 
 ### Mode: `docs_web`
@@ -327,8 +359,8 @@ promptlab scraper --mode web --count 50
 **Document-grounded generation** — downloads authoritative documents, indexes them locally with TF-IDF, retrieves relevant chunks per intent query, and generates testcases from evidence using an LLM (with heuristic fallback). Every testcase includes **provenance metadata**: `source_doc_id`, `source_url`, `page_number`, `chunk_id`, `section`, and `evidence_span`.
 
 ```bash
-promptlab scraper --mode docs_web --count 100
-promptlab scraper --mode docs_web --top-k 15 --max-docs 30
+promptlab bsp gen --mode docs_web --count 100
+promptlab bsp gen --mode docs_web --top-k 15 --max-docs 30
 ```
 
 **Pipeline:**
@@ -360,7 +392,7 @@ cases:
 Runs `docs_web` first. If the target count isn't reached, falls back to the `web` pipeline for the remainder.
 
 ```bash
-promptlab scraper --mode hybrid --count 100
+promptlab bsp gen --mode hybrid --count 100
 ```
 
 ### Configuration
@@ -457,8 +489,8 @@ Auto-scraping triggers when:
 - BSP file present
 
 Manual generation can be controlled during validation via:
-- `promptlab validate --generate 100` (or any target count)
-- `promptlab validate --no-generate` to skip generation
+- `promptlab bsp run --generate 100` (or any target count)
+- `promptlab bsp run --no-generate` to skip generation
 
 ---
 

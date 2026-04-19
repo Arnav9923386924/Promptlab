@@ -120,12 +120,13 @@ class ChairmanSynthesizer:
         )
 
         result = await self.llm_runner.complete_with_fallback(
+            prompt=prompt,
+            fallback_models=[],
+            model=self.chairman_model,
             system_prompt=_CHAIRMAN_SYSTEM_PROMPT,
-            user_prompt=prompt,
-            preferred_model=self.chairman_model,
         )
 
-        return self._parse_chairman_response(result.content)
+        return self._parse_chairman_response(result.text)
 
     def _parse_chairman_response(self, raw_response: str) -> ChairmanVerdict:
         """Parse chairman response into ChairmanVerdict."""
